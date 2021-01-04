@@ -31,7 +31,7 @@ var (
 	cookie       string
 	taskNum      string
 	prevent      string
-	photoAlbums	 string
+	photoAlbums  string
 	reqHeader    map[string]string
 	albumUrl     string
 	inWg         sync.WaitGroup
@@ -112,7 +112,7 @@ func main() {
 
 	var (
 		xiangCe string
-		albs []string
+		albs    []string
 	)
 
 	if photoAlbums != "" {
@@ -329,11 +329,11 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			// 假如本地已经存在改文件名，那就匹配文件大小是否一致
 			fileInfo, _ := os.Stat(p)
 			fsize := fileInfo.Size()
-			respHeader, err := HttpHead(source, reqHeader)
-			newFileSise, e := strconv.ParseInt(respHeader.Get("Content-Length"), 10, 64)
-			if err != nil || e != nil || respHeader == nil || newFileSise != fsize {
+			respHeader, err := http.Get(source)
+			if err != nil || respHeader == nil || respHeader.ContentLength != fsize {
 				os.RemoveAll(localFiles[tmpName])
 			} else {
+				respHeader.Body.Close()
 				m.Lock()
 				succ++
 				albumSucc++
@@ -370,7 +370,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc+1), len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc + 1), len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
@@ -439,34 +439,6 @@ func HttpGet(url string, msgs ...map[string]string) ([]byte, error) {
 		}
 	}
 	return result.Bytes(), nil
-}
-
-func HttpHead(url string, msgs ...map[string]string) (http.Header, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	headers := make(map[string]string)
-	if len(msgs) > 0 {
-		headers = msgs[0]
-	}
-
-	for key, val := range headers {
-		req.Header.Set(key, val)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP请求失败. 状态码：%s", resp.Status)
-	}
-
-	return resp.Header, err
 }
 
 // 判断所给路径是否为文件夹
@@ -645,8 +617,8 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	}
 
 	var (
-		size             int64 = 0
-		contentLength, _       = strconv.ParseInt(hresp.Header.Get("Content-Length"), 10, 64)
+		size          int64 = 0
+		contentLength int64 = hresp.ContentLength
 	)
 
 	if IsFile(target) {
