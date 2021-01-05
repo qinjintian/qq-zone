@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,9 +35,9 @@ var (
 	photoAlbums  string
 	reqHeader    map[string]string
 	albumUrl     string
-	inWg         sync.WaitGroup
-	outWg        sync.WaitGroup
-	chs          chan int
+	waiterIn     sync.WaitGroup
+	waiterOut    sync.WaitGroup
+	haschan      chan int
 	m            sync.Mutex
 	albumSucc    uint64 = 0
 	total        uint64 = 0        // 相片/视频总数
@@ -56,40 +57,34 @@ func main() {
 	qq = scanner.Text()
 	_, err := strconv.ParseFloat(qq, 64)
 	if qq == "" || err != nil {
-		fmt.Println("\nQQ账号错误，请检查无误后按回车键")
-		os.Exit(0)
+		reEnter("QQ账号错误，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入您的[g_tk]参数，结束请按回车键：")
 	scanner.Scan()
 	gtk = scanner.Text()
 	if gtk == "" {
-		fmt.Println("\ng_tk参数错误，请检查无误后按回车键")
-		os.Exit(0)
+		reEnter("g_tk参数错误，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入您的[cookie]参数，结束请按回车键：")
 	scanner.Scan()
 	cookie = scanner.Text()
 	if cookie == "" {
-		fmt.Println("\ncookie参数无效，请检查无误后按回车键")
-		os.Exit(0)
+		reEnter("cookie参数无效，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入并行下载任务数[1至100范围内]，默认为1，结束请按回车键：")
 	scanner.Scan()
 	taskNum = scanner.Text()
-	var (
-		tasks int
-		error error
-	)
+	var tasks int
 	if taskNum == "" {
 		tasks = 1
 	} else {
-		tasks, error = strconv.Atoi(taskNum)
-		if error != nil || tasks < 1 || tasks > 100 {
-			fmt.Println("\n并行下载任务数输入错误，只允许1至100范围内的数字，默认为1，请重新输入")
-			os.Exit(0)
+		var err error
+		tasks, err = strconv.Atoi(taskNum)
+		if err != nil || tasks < 1 || tasks > 100 {
+			reEnter("并行下载任务数输入错误，请按任意键退出后重新启动程序输入...")
 		}
 	}
 
@@ -101,12 +96,11 @@ func main() {
 	} else {
 		prevent = strings.ToLower(prevent)
 		if prevent != "y" && prevent != "n" {
-			fmt.Println("\n否开启防重复下载输入错误，只能输入[y/n]，请重新输入")
-			os.Exit(0)
+			reEnter("否开启防重复下载输入错误，只能输入[y/n]，请按任意键退出后重新启动程序输入...")
 		}
 	}
 
-	fmt.Printf("请输入要下载的相册，多个相册请按空格键隔开，格式[相册1 相册2]，为空时默认下载全部相册")
+	fmt.Printf("请输入要下载的相册，多个相册请按空格键隔开，格式[相册1 相册2]，为空时默认下载全部相册：")
 	scanner.Scan()
 	photoAlbums = scanner.Text()
 
@@ -133,7 +127,7 @@ func main() {
 	fmt.Println("要下载的相册名：", xiangCe)
 	fmt.Println()
 
-	chs = make(chan int, tasks)
+	haschan = make(chan int, tasks)
 
 	// 指定要下载的相册
 	whitelist := make(map[string]bool)
@@ -142,7 +136,6 @@ func main() {
 	}
 
 	time.Sleep(time.Second * 3)
-	fmt.Println()
 
 	reqHeader = make(map[string]string)
 	reqHeader["cookie"] = cookie
@@ -156,14 +149,12 @@ func main() {
 	// 获取相册列表
 	albumList, err := GetAlbumList()
 	if err != nil {
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "获取相册列表数据错误：", err.Error())
-		os.Exit(0)
+		reEnter(fmt.Sprintf("%v 获取相册列表数据错误，请按任意键退出：%v", time.Now().Format("2006/01/02 15:04:05"), err.Error()))
 	}
 
 	var albumListArr []gjson.Result = gjson.Parse(albumList).Array()
 	if len(albumListArr) < 1 {
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "没有获取到任何相册数据，请检查cookie是否有效")
-		os.Exit(0)
+		reEnter(fmt.Sprintf("%v 没有获取到任何相册数据，请检查cookie是否有效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
 	}
 
 	for _, album := range albumListArr {
@@ -192,8 +183,7 @@ func main() {
 			photoListUrl := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
 			b, err := HttpGet(photoListUrl, reqHeader)
 			if err != nil {
-				fmt.Println(fmt.Sprintf("%v 获取相册图片[%s]第%d页错误:%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), i, err.Error()))
-				os.Exit(0)
+				reEnter(fmt.Sprintf("%v 获取相册图片[%s]第%d页错误，请按任意键退出:%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), i, err.Error()))
 			}
 			photoJson := string(b)
 			photoJson = photoJson[15:]
@@ -228,35 +218,49 @@ func main() {
 		albumSucc = 0 // 重新初始化为0
 		// 正在下载处理
 		for key, photo := range albumPhotos {
-			inWg.Add(1)
-			outWg.Add(1)
-			chs <- 1
+			waiterIn.Add(1)
+			waiterOut.Add(1)
+			haschan <- 1
 			go StartDownload(key, photo, albumPhotos, album, albumPath)
 		}
-		inWg.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
+		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
 
-	close(chs)
+	close(haschan)
 
-	outWg.Wait()
+	waiterOut.Wait()
 	ticker.Stop()
 
 	if prevent == "y" {
 		if duplicateNum > 0 {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]的相片/视频下载完成，总共有%d个文件，%d张相片, %d部视频, 已下载%d张相片/视频, 其中新增%d, %d张已存在的相片/视频已跳过", time.Now().Format("2006/01/02 15:04:05"), qq, total, imageNum, videoNum, succ, newNum, duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum))
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]的相片/视频下载完成，总共有%d个文件，%d张相片, %d部视频, 已下载%d张相片/视频, 其中新增%d, 重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, imageNum, videoNum, succ, newNum, duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum))
 		}
 	} else {
-		fmt.Println(fmt.Sprintf("%v QQ空间[%v]的相片/视频下载完成，总共有%d个文件，%d张相片, %d部视频, 已下载%d张相片/视频, 其中新增%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, imageNum, videoNum, succ, newNum))
+		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum))
 	}
+
+	fmt.Println()
+	fmt.Printf("请按任意键退出...")
+	b := make([]byte, 1)
+	os.Stdin.Read(b)
 }
 
 func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, album gjson.Result, albumPath string) {
 	defer func() {
-		<-chs
-		inWg.Done()
-		outWg.Done()
+		<-haschan
+		waiterIn.Done()
+		waiterOut.Done()
+
+		if e := recover(); e != nil {
+			// 打印栈信息
+			buf := make([]byte, 1024)
+			buf = buf[:runtime.Stack(buf, false)]
+			err := fmt.Errorf("[PANIC]%v\n%s\n", e, buf)
+			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程报错引起恐慌，相片/视频名：%v  错误相关信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), err.Error()))
+			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程报错引起恐慌，相片/视频名：%v  错误相关信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), err.Error()), 1)
+		}
 	}()
 
 	sloc := photo.Get("sloc").String()
@@ -276,13 +280,13 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	if photo.Get("is_video").Bool() {
 		resourceType = "视频"
 		videoUrl := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, qq, qq)
-		bytes, err := HttpGet(videoUrl, reqHeader)
+		b, err := HttpGet(videoUrl, reqHeader)
 		if err != nil {
 			fmt.Println(logPath, time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
 			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()), 1)
 			return
 		}
-		videoJson := string(bytes)
+		videoJson := string(b)
 		videoJson = videoJson[16:]
 		videoJson = videoJson[:strings.LastIndex(videoJson, ")")]
 		videoData := gjson.Parse(videoJson).Get("data")
@@ -335,6 +339,11 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			} else {
 				respHeader.Body.Close()
 				m.Lock()
+				if resourceType == "相片" {
+					imageNum++
+				} else {
+					videoNum++
+				}
 				succ++
 				albumSucc++
 				duplicateNum++
@@ -355,7 +364,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	resp, err := Download(source, target, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频名：%s  相册列表页地址：%s  错误信息：%s\n", album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
+		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
 		WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()), 1)
 		return
 	} else {
@@ -379,6 +388,13 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		fmt.Println(output)
 		m.Unlock()
 	}
+}
+
+func reEnter(msg interface{}) {
+	fmt.Println(msg)
+	b := make([]byte, 1)
+	os.Stdin.Read(b)
+	os.Exit(0)
 }
 
 // 定时发送心跳，防止cookie过期
@@ -682,7 +698,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		if retry > 0 {
 			return Download(uri, target, retry-1, timeout, progressbar)
 		} else {
-			return nil, err
+			return nil, fmt.Errorf("Download error，http status code：%v，Status：%v", resp.StatusCode, resp.Status)
 		}
 	}
 
@@ -700,7 +716,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		reader := io.LimitReader(io.MultiReader(resp.Body), int64(resp.ContentLength))
 		bar := pbar.Full.Start64(resp.ContentLength)
 		barReader := bar.NewProxyReader(reader)
-		_, err = io.Copy(file, barReader)
+		_, err := io.Copy(file, barReader)
 		bar.Finish()
 		if err != nil {
 			if retry > 0 {
