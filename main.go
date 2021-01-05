@@ -233,9 +233,9 @@ func main() {
 
 	if prevent == "y" {
 		if duplicateNum > 0 {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum, (total-succ)))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ), duplicateNum))
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum, (total-succ)))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ), duplicateNum))
 		}
 	} else {
 		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ)))
