@@ -42,7 +42,6 @@ var (
 	albumSucc    uint64 = 0
 	total        uint64 = 0        // 相片/视频总数
 	succ         uint64 = 0        // 下载成功数
-	fail         uint64 = 0        // 下载失败数
 	newNum       uint64 = 0        // 新增数
 	duplicateNum uint64 = 0        // 重复数
 	videoNum     uint64 = 0        // 视频数
