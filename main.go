@@ -57,21 +57,21 @@ func main() {
 	qq = scanner.Text()
 	_, err := strconv.ParseFloat(qq, 64)
 	if qq == "" || err != nil {
-		reEnter("QQ账号错误，请按任意键退出后重新启动程序输入...")
+		ReEnter("QQ账号错误，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入您的[g_tk]参数，结束请按回车键：")
 	scanner.Scan()
 	gtk = scanner.Text()
 	if gtk == "" {
-		reEnter("g_tk参数错误，请按任意键退出后重新启动程序输入...")
+		ReEnter("g_tk参数错误，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入您的[cookie]参数，结束请按回车键：")
 	scanner.Scan()
 	cookie = scanner.Text()
 	if cookie == "" {
-		reEnter("cookie参数无效，请按任意键退出后重新启动程序输入...")
+		ReEnter("cookie参数无效，请按任意键退出后重新启动程序输入...")
 	}
 
 	fmt.Printf("请输入并行下载任务数[1至100范围内]，默认为1，结束请按回车键：")
@@ -84,7 +84,7 @@ func main() {
 		var err error
 		tasks, err = strconv.Atoi(taskNum)
 		if err != nil || tasks < 1 || tasks > 100 {
-			reEnter("并行下载任务数输入错误，请按任意键退出后重新启动程序输入...")
+			ReEnter("并行下载任务数输入错误，请按任意键退出后重新启动程序输入...")
 		}
 	}
 
@@ -96,7 +96,7 @@ func main() {
 	} else {
 		prevent = strings.ToLower(prevent)
 		if prevent != "y" && prevent != "n" {
-			reEnter("否开启防重复下载输入错误，只能输入[y/n]，请按任意键退出后重新启动程序输入...")
+			ReEnter("否开启防重复下载输入错误，只能输入[y/n]，请按任意键退出后重新启动程序输入...")
 		}
 	}
 
@@ -149,12 +149,12 @@ func main() {
 	// 获取相册列表
 	albumList, err := GetAlbumList()
 	if err != nil {
-		reEnter(fmt.Sprintf("%v 获取相册列表数据错误，请按任意键退出：%v", time.Now().Format("2006/01/02 15:04:05"), err.Error()))
+		ReEnter(fmt.Sprintf("%v 获取相册列表数据错误，请按任意键退出：%v", time.Now().Format("2006/01/02 15:04:05"), err.Error()))
 	}
 
 	var albumListArr []gjson.Result = gjson.Parse(albumList).Array()
 	if len(albumListArr) < 1 {
-		reEnter(fmt.Sprintf("%v 没有获取到任何相册数据，请检查cookie是否有效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
+		ReEnter(fmt.Sprintf("%v 没有获取到任何相册数据，请检查cookie是否有效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
 	}
 
 	for _, album := range albumListArr {
@@ -183,7 +183,7 @@ func main() {
 			photoListUrl := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
 			b, err := HttpGet(photoListUrl, reqHeader)
 			if err != nil {
-				reEnter(fmt.Sprintf("%v 获取相册图片[%s]第%d页错误，请按任意键退出:%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), i, err.Error()))
+				ReEnter(fmt.Sprintf("%v 获取相册图片[%s]第%d页错误，请按任意键退出:%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), i, err.Error()))
 			}
 			photoJson := string(b)
 			photoJson = photoJson[15:]
@@ -274,11 +274,8 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 
 		if e := recover(); e != nil {
 			// 打印栈信息
-			buf := make([]byte, 1024)
-			buf = buf[:runtime.Stack(buf, false)]
-			err := fmt.Errorf("[PANIC]%v\n%s\n", e, buf)
-			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程报错引起恐慌，相片/视频名：%v  错误相关信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), err.Error()))
-			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程报错引起恐慌，相片/视频名：%v  错误相关信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), err.Error()), 1)
+			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
+			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))), 1)
 		}
 	}()
 
@@ -409,12 +406,36 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	}
 }
 
-func reEnter(msg interface{}) {
+func ReEnter(msg interface{}) {
 	fmt.Println(msg)
 	b := make([]byte, 1)
 	os.Stdin.Read(b)
 	os.Exit(0)
 }
+
+// 跟踪panic堆栈信息
+func PanicTrace(kb int) []byte {
+	s := []byte("/src/runtime/panic.go")
+	e := []byte("\ngoroutine ")
+	line := []byte("\n")
+	stack := make([]byte, kb<<10) //4KB
+	length := runtime.Stack(stack, true)
+	start := bytes.Index(stack, s)
+	stack = stack[start:length]
+	start = bytes.Index(stack, line) + 1
+	stack = stack[start:]
+	end := bytes.LastIndex(stack, line)
+	if end != -1 {
+		stack = stack[:end]
+	}
+	end = bytes.Index(stack, e)
+	if end != -1 {
+		stack = stack[:end]
+	}
+	stack = bytes.TrimRight(stack, "\n")
+	return stack
+}
+
 
 // 定时发送心跳，防止cookie过期
 func Heartbeat(ticker *time.Ticker) {
