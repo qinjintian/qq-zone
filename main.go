@@ -41,7 +41,8 @@ var (
 	m            sync.Mutex
 	albumSucc    uint64 = 0
 	total        uint64 = 0        // 相片/视频总数
-	succ         uint64 = 0        // 成功下载数
+	succ         uint64 = 0        // 下载成功数
+	fail         uint64 = 0        // 下载失败数
 	newNum       uint64 = 0        // 新增数
 	duplicateNum uint64 = 0        // 重复数
 	videoNum     uint64 = 0        // 视频数
@@ -233,18 +234,37 @@ func main() {
 
 	if prevent == "y" {
 		if duplicateNum > 0 {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum, (total-succ)))
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, duplicateNum, (total-succ)))
 		}
 	} else {
-		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum))
+		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ)))
 	}
 
 	fmt.Println()
-	fmt.Printf("请按任意键退出...")
-	b := make([]byte, 1)
-	os.Stdin.Read(b)
+
+	var (
+		serial int
+		input string
+	)
+
+	for {
+		if serial > 0 {
+			fmt.Println("\n请输入stop退出程序...")
+		} else {
+			fmt.Println("请输入stop退出程序...")
+		}
+		_, err := fmt.Scanln(&input)
+		if err != nil {
+			continue
+		}
+		fmt.Println("您输入的是：", input)
+		if input == "stop" {
+			break
+		}
+		serial++
+	}
 }
 
 func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, album gjson.Result, albumPath string) {
@@ -379,7 +399,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc + 1), len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc), len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
