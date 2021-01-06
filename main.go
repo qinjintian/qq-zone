@@ -10,6 +10,7 @@ import (
 	"github.com/tidwall/gjson"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"mime"
 	"net/http"
 	_ "net/url"
@@ -51,6 +52,9 @@ var (
 )
 
 func main() {
+
+
+
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Printf("请输入您的QQ号，结束请按回车键：")
 	scanner.Scan()
@@ -154,7 +158,7 @@ func main() {
 
 	var albumListArr []gjson.Result = gjson.Parse(albumList).Array()
 	if len(albumListArr) < 1 {
-		ReEnter(fmt.Sprintf("%v 没有获取到任何相册数据，请检查cookie是否有效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
+		ReEnter(fmt.Sprintf("%v 没有获取到任何相册数据，可能输入参数有误或cookie已失效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
 	}
 
 	for _, album := range albumListArr {
@@ -233,19 +237,19 @@ func main() {
 
 	if prevent == "y" {
 		if duplicateNum > 0 {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 检测到%d张相片/视频本地已存在并忽略下载", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ), duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ), duplicateNum))
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，重复%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ), duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ), duplicateNum))
 		}
 	} else {
-		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total-succ)))
+		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ)))
 	}
 
 	fmt.Println()
 
 	var (
 		serial int
-		input string
+		input  string
 	)
 
 	for {
@@ -355,10 +359,10 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			} else {
 				respHeader.Body.Close()
 				m.Lock()
-				if resourceType == "相片" {
-					imageNum++
-				} else {
+				if photo.Get("is_video").Bool() {
 					videoNum++
+				} else {
+					imageNum++
 				}
 				succ++
 				albumSucc++
@@ -436,7 +440,6 @@ func PanicTrace(kb int) []byte {
 	return stack
 }
 
-
 // 定时发送心跳，防止cookie过期
 func Heartbeat(ticker *time.Ticker) {
 	for t := range ticker.C {
@@ -448,8 +451,7 @@ func Heartbeat(ticker *time.Ticker) {
 func GetAlbumList() (string, error) {
 	bytes, err := HttpGet(albumUrl, reqHeader)
 	if err != nil {
-		fmt.Println("获取相册列表出错：" + err.Error())
-		os.Exit(0)
+		ReEnter("获取相册列表出错："+err.Error())
 	}
 	str := string(bytes)
 	str = str[15:]
@@ -738,7 +740,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		if retry > 0 {
 			return Download(uri, target, retry-1, timeout, progressbar)
 		} else {
-			return nil, fmt.Errorf("Download error，http status code：%v，Status：%v", resp.StatusCode, resp.Status)
+			return nil, fmt.Errorf("Http request was not successfully received and processed, status code is %v, status is %v", resp.StatusCode, resp.Status)
 		}
 	}
 
