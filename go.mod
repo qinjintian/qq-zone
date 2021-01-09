@@ -1,4 +1,4 @@
-module qzone
+module qq-zone
 
 go 1.14
 

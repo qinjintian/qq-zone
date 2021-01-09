@@ -10,7 +10,6 @@ import (
 	"github.com/tidwall/gjson"
 	"io"
 	"io/ioutil"
-	"math/rand"
 	"mime"
 	"net/http"
 	_ "net/url"
@@ -23,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"qq-zone/utils"
 )
 
 const logPath = "storage/logs/qzone/log.log"
@@ -31,7 +31,7 @@ var (
 	qq           string
 	gtk          string
 	cookie       string
-	taskNum      string
+	tasks        int
 	prevent      string
 	photoAlbums  string
 	reqHeader    map[string]string
@@ -51,87 +51,108 @@ var (
 	albumPhotos  []gjson.Result
 )
 
+const dotted string = `
+                       .::::.
+                     .::::::::.
+                    :::::::::::
+                 ..:::::::::::'
+              '::::::::::::'
+                .::::::::::
+           '::::::::::::::..
+                ..::::::::::::.
+              `+"``"+`::::::::::::::::
+               ::::`+"``"+`:::::::::'        .:::.
+              ::::'   ':::::'       .::::::::.
+            .::::'      ::::     .:::::::'::::.
+           .:::'       :::::  .:::::::::' ':::::.
+          .::'        :::::.:::::::::'      ':::::.
+         .::'         ::::::::::::::'         `+"``"+`::::.
+     ...:::           ::::::::::::'              `+"``"+`::.
+    `+"````"+` ':.          ':::::::::'                  ::::..
+                       '.:::::'                    ':'`+"````"+`..
+
+| 声明：本程序绿色无毒，仅提供扫码登录QQ空间批量下载相册相片  |
+`
+
 func main() {
+	fmt.Println(dotted)
 
-
-
+Start:
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Printf("请输入您的QQ号，结束请按回车键：")
-	scanner.Scan()
-	qq = scanner.Text()
-	_, err := strconv.ParseFloat(qq, 64)
-	if qq == "" || err != nil {
-		ReEnter("QQ账号错误，请按任意键退出后重新启动程序输入...")
-	}
-
-	fmt.Printf("请输入您的[g_tk]参数，结束请按回车键：")
-	scanner.Scan()
-	gtk = scanner.Text()
-	if gtk == "" {
-		ReEnter("g_tk参数错误，请按任意键退出后重新启动程序输入...")
-	}
-
-	fmt.Printf("请输入您的[cookie]参数，结束请按回车键：")
-	scanner.Scan()
-	cookie = scanner.Text()
-	if cookie == "" {
-		ReEnter("cookie参数无效，请按任意键退出后重新启动程序输入...")
-	}
-
-	fmt.Printf("请输入并行下载任务数[1至100范围内]，默认为1，结束请按回车键：")
-	scanner.Scan()
-	taskNum = scanner.Text()
-	var tasks int
-	if taskNum == "" {
-		tasks = 1
-	} else {
-		var err error
-		tasks, err = strconv.Atoi(taskNum)
-		if err != nil || tasks < 1 || tasks > 100 {
-			ReEnter("并行下载任务数输入错误，请按任意键退出后重新启动程序输入...")
+	for {
+		fmt.Printf("请输入QQ号：")
+		scanner.Scan()
+		qq = scanner.Text()
+		_, err := strconv.ParseFloat(qq, 64)
+		if qq == "" || err != nil {
+			fmt.Println("QQ号不正确，请重新输入~")
+			continue
 		}
+		break
 	}
 
-	fmt.Printf("请输入是否开启防重复下载，默认是y，结束请按回车键[y/n]：")
-	scanner.Scan()
-	prevent = scanner.Text()
-	if prevent == "" {
-		prevent = "y"
-	} else {
-		prevent = strings.ToLower(prevent)
-		if prevent != "y" && prevent != "n" {
-			ReEnter("否开启防重复下载输入错误，只能输入[y/n]，请按任意键退出后重新启动程序输入...")
+	for {
+		fmt.Printf("请输入1~100之间的并行下载任务数，默认为1：")
+		scanner.Scan()
+		task := scanner.Text()
+		if task == "" {
+			tasks = 1
+		} else {
+			var err error
+			tasks, err = strconv.Atoi(task)
+			if err != nil || tasks < 1 || tasks > 100 {
+				fmt.Println("并行下载任务数不正确，输入范围为1~100之间的整数，请重新输入~")
+				continue
+			}
 		}
+		break
 	}
 
-	fmt.Printf("请输入要下载的相册，多个相册请按空格键隔开，格式[相册1 相册2]，为空时默认下载全部相册：")
+	for {
+		fmt.Printf("是否开启防重复下载，可选[y/n]，默认是y：")
+		scanner.Scan()
+		prevent = scanner.Text()
+		if prevent == "" {
+			prevent = "y"
+		} else {
+			prevent = strings.ToLower(prevent)
+			if prevent != "y" && prevent != "n" {
+				fmt.Println("防重复下载输入不正确，可选[y/n]，请重新输入~")
+				continue
+			}
+		}
+		break
+	}
+
+	fmt.Printf("请输入要下载的相册名，多个相册用空格键隔开，格式[相册1 相册2]，不输入默认下载全部相册：")
 	scanner.Scan()
 	photoAlbums = scanner.Text()
 
-	var (
-		xiangCe string
-		albs    []string
-	)
-
+	var albs []string
 	if photoAlbums != "" {
 		albs = strings.Split(photoAlbums, " ")
-		xiangCe = photoAlbums
 	} else {
 		albs = []string{}
-		xiangCe = "全部相册"
 	}
 
-	fmt.Println()
-	fmt.Println("以下参数为终端输入的参数，程序将在3秒后开始进行下载")
-	fmt.Println("QQ：", qq)
-	fmt.Println("g_tk：", gtk)
-	fmt.Println("cookie：", cookie)
-	fmt.Println("并行下载任务数：", taskNum)
-	fmt.Println("是否开启防重复下载：", prevent)
-	fmt.Println("要下载的相册名：", xiangCe)
-	fmt.Println()
+	res, err := utils.Login()
+	if err != nil {
+		fmt.Println("登录QQ空间过程异常，正在根据提示重新输入，退出请按Ctrl+Z")
+		goto Start
+	}
 
+	qrcode := "qrcode.png"
+	if IsFile(qrcode) {
+		os.Remove(qrcode)
+	}
+
+	gtk = res["g_tk"]
+	cookie = res["cookie"]
 	haschan = make(chan int, tasks)
+
+	fmt.Println()
+	fmt.Println("一切已准备就绪，即将开始下载~~~~")
+	fmt.Println()
 
 	// 指定要下载的相册
 	whitelist := make(map[string]bool)
@@ -254,9 +275,9 @@ func main() {
 
 	for {
 		if serial > 0 {
-			fmt.Println("\n请输入stop退出程序...")
+			fmt.Println("\n请按Ctrl+C或输入stop退出程序...")
 		} else {
-			fmt.Println("请输入stop退出程序...")
+			fmt.Println("请按Ctrl+C或输入stop退出程序...")
 		}
 		_, err := fmt.Scanln(&input)
 		if err != nil {
@@ -451,7 +472,7 @@ func Heartbeat(ticker *time.Ticker) {
 func GetAlbumList() (string, error) {
 	bytes, err := HttpGet(albumUrl, reqHeader)
 	if err != nil {
-		ReEnter("获取相册列表出错："+err.Error())
+		ReEnter("获取相册列表出错：" + err.Error())
 	}
 	str := string(bytes)
 	str = str[15:]
