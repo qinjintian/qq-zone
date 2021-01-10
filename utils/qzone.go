@@ -55,6 +55,7 @@ StartLoop:
 	qrsig := strings.Replace(strings.Split(header.Get("Set-Cookie"), ";")[0], "qrsig=", "", 1)
 	ptqrtoken := ptqrtoken(qrsig)
 	res := make(map[string]string)
+	var isFirstLoop bool
 
 OuterLoop:
 	for {
@@ -69,16 +70,21 @@ OuterLoop:
 
 		s := strings.Split(strings.ReplaceAll(str[strings.Index(str, "(")+1:len(str)-1], "'", ""), ",")
 		// 间隔3秒循环一次
-		time.Sleep(time.Second * 3)
+		if isFirstLoop {
+			time.Sleep(time.Second * 3)
+		}
 		// 65 二维码已失效 66 二维码未失效 67 已扫描,但还未点击确认 0  已经点击确认,并登录成功
 		switch s[0] {
 		case "65":
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "二维码失效，已重新生成")
 			goto StartLoop
 		case "66":
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "二维码已生成在根目录，请双击打开[qrcode.png]并使用手机QQ扫码登录")
+			isFirstLoop = true
 			continue OuterLoop
 		case "67":
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "已扫描,请点击允许登录")
+			isFirstLoop = true
 			continue OuterLoop
 		case "0":
 			// 已经点击确认,并登录成功
