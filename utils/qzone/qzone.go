@@ -1,12 +1,12 @@
-package utils
+package qzone
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
+	myhttp "qq-zone/utils/net/http"
 	pkgurl "net/url"
 	"os"
 	"strconv"
@@ -104,7 +104,7 @@ func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 	header["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"
 	header["cookie"] = fmt.Sprintf("qrsig=%s;", qrsig)
 	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", pkgurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
-	b, err := httpGet(url, header)
+	b, err := myhttp.Get(url, header)
 	if err != nil {
 		return "", errors.New(err.Error())
 	}
@@ -207,7 +207,7 @@ func getCredential(url string) (map[string]string, error) {
 
 	var (
 		p_skey string
-		needs = []string{"uin", "skey", "p_uin", "pt4_token", "p_skey"} // 需要从set-cookie取的参数
+		needs  = []string{"uin", "skey", "p_uin", "pt4_token", "p_skey"} // 需要从set-cookie取的参数
 		cookie = make([]string, 0)
 	)
 
@@ -239,48 +239,4 @@ func gtk(skey string) string {
 		h += (h << 5) + int(skey[i])
 	}
 	return strconv.Itoa(h & 2147483647)
-}
-
-// 获取登录成功进入空间活动的cookie
-func getCookie() {
-
-}
-
-func httpGet(url string, msgs ...map[string]string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	headers := make(map[string]string)
-	if len(msgs) > 0 {
-		headers = msgs[0]
-	}
-
-	for key, val := range headers {
-		req.Header.Set(key, val)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP request failed, status code：%s", resp.Status)
-	}
-
-	var buffer [512]byte
-	result := bytes.NewBuffer(nil)
-	for {
-		n, err := resp.Body.Read(buffer[0:])
-		result.Write(buffer[0:n])
-		if err != nil && err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-	}
-	return result.Bytes(), nil
 }

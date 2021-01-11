@@ -3,26 +3,21 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/md5"
-	"crypto/tls"
 	"fmt"
-	pbar "github.com/cheggaaa/pb/v3"
 	"github.com/tidwall/gjson"
-	"io"
-	"io/ioutil"
-	"mime"
 	"net/http"
 	_ "net/url"
 	"os"
 	"path"
-	"path/filepath"
+	"qq-zone/utils/helper"
+	myhttp "qq-zone/utils/net/http"
+	"qq-zone/utils/qzone"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"qq-zone/utils"
 )
 
 const logPath = "storage/logs/qzone/log.log"
@@ -60,16 +55,16 @@ const dotted string = `
             .::::::::::
        '::::::::::::::..
             ..::::::::::::.
-          `+"``"+`::::::::::::::::
-           ::::`+"``"+`:::::::::'        .:::.
+          ` + "``" + `::::::::::::::::
+           ::::` + "``" + `:::::::::'        .:::.
           ::::'   ':::::'       .::::::::.
         .::::'      ::::     .:::::::'::::.
        .:::'       :::::  .:::::::::' ':::::.
       .::'        :::::.:::::::::'      ':::::.
-     .::'         ::::::::::::::'         `+"``"+`::::.
- ...:::           ::::::::::::'              `+"``"+`::.
-`+"````"+` ':.          ':::::::::'                  ::::..
-                   '.:::::'                    ':'`+"````"+`..
+     .::'         ::::::::::::::'         ` + "``" + `::::.
+ ...:::           ::::::::::::'              ` + "``" + `::.
+` + "````" + ` ':.          ':::::::::'                  ::::..
+                   '.:::::'                    ':'` + "````" + `..
 
 ※※※※※※※※※※QQ空间相册相片/视频下载器※※※※※※※※※※
 
@@ -80,6 +75,11 @@ const dotted string = `
 ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
 
 func main() {
+
+	InputMenu("获取相册列表数据错误：xxx噢噢")
+}
+
+func BeforeDownload() {
 	fmt.Println(dotted)
 
 Start:
@@ -140,14 +140,14 @@ Start:
 		albs = []string{}
 	}
 
-	res, err := utils.Login()
+	res, err := qzone.Login()
 	if err != nil {
 		fmt.Println("登录QQ空间异常，正在根据提示重新输入，退出请按Ctrl+Z")
 		goto Start
 	}
 
 	qrcode := "qrcode.png"
-	if IsFile(qrcode) {
+	if helper.IsFile(qrcode) {
 		os.Remove(qrcode)
 	}
 
@@ -178,12 +178,12 @@ Start:
 	// 获取相册列表
 	albumList, err := GetAlbumList()
 	if err != nil {
-		ReEnter(fmt.Sprintf("%v 获取相册列表数据错误，请按任意键退出：%v", time.Now().Format("2006/01/02 15:04:05"), err.Error()))
+		InputMenu(fmt.Sprintf("获取相册列表数据错误，：%v", err.Error()))
 	}
 
 	var albumListArr []gjson.Result = gjson.Parse(albumList).Array()
 	if len(albumListArr) < 1 {
-		ReEnter(fmt.Sprintf("%v 没有获取到任何相册数据，可能输入参数有误或cookie已失效，请按任意键退出...", time.Now().Format("2006/01/02 15:04:05")))
+		InputMenu(fmt.Sprintf("没有获取到任何相册数据，可能输入参数有误或cookie已失效~~~", ))
 	}
 
 	for _, album := range albumListArr {
@@ -195,7 +195,7 @@ Start:
 		}
 
 		albumPath := "./storage/qzone/album/" + name
-		if !IsDir(albumPath) {
+		if !helper.IsDir(albumPath) {
 			os.MkdirAll(albumPath, os.ModePerm)
 		}
 
@@ -210,9 +210,9 @@ Start:
 		albumPhotos = make([]gjson.Result, 0)
 		for {
 			photoListUrl := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
-			b, err := HttpGet(photoListUrl, reqHeader)
+			b, err := myhttp.Get(photoListUrl, reqHeader)
 			if err != nil {
-				ReEnter(fmt.Sprintf("%v 获取相册图片[%s]第%d页错误，请按任意键退出:%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), i, err.Error()))
+				InputMenu(fmt.Sprintf("获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), i, err.Error()))
 			}
 			photoJson := string(b)
 			photoJson = photoJson[15:]
@@ -233,7 +233,7 @@ Start:
 
 		if prevent == "y" {
 			localFiles = make(map[string]string, 0)
-			fpaths, _ := GetAllFiles(albumPath)
+			fpaths, _ := helper.GetAllFiles(albumPath)
 			for _, fPath := range fpaths {
 				fName := path.Base(fPath)
 				fName = fName[:strings.LastIndex(fName, ".")]
@@ -304,7 +304,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		if e := recover(); e != nil {
 			// 打印栈信息
 			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
-			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))), 1)
+			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))), 1)
 		}
 	}()
 
@@ -325,10 +325,10 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	if photo.Get("is_video").Bool() {
 		resourceType = "视频"
 		videoUrl := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, qq, qq)
-		b, err := HttpGet(videoUrl, reqHeader)
+		b, err := myhttp.Get(videoUrl, reqHeader)
 		if err != nil {
 			fmt.Println(logPath, time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
-			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()), 1)
+			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()), 1)
 			return
 		}
 		videoJson := string(b)
@@ -338,7 +338,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		videos := videoData.Get("photos").Array()
 		if len(videos) < 1 {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl))
-			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl), 1)
+			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl), 1)
 			return
 		}
 		picPosInPage := videoData.Get("picPosInPage").Int()
@@ -347,12 +347,12 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		// 状态为2的表示可以正常播放的视频，也就是已经转换并上传在QQ空间服务器上
 		if status != 2 {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("name").String()))
-			WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("url").String()), 1)
+			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("url").String()), 1)
 			return
 		}
 		source = videoInfo["video_url"].String()
 		// 目前QQ空间所有视频都是MP4格式，所以暂时固定后缀名都是.mp4
-		fileName = fmt.Sprintf("VID_%s_%s_%s.mp4", shootdate[:8], shootdate[8:], Md5(sloc)[8:24])
+		fileName = fmt.Sprintf("VID_%s_%s_%s.mp4", shootdate[:8], shootdate[8:], helper.Md5(sloc)[8:24])
 	} else {
 		resourceType = "相片"
 		if raw := photo.Get("raw").String(); raw != "" {
@@ -363,7 +363,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			source = photo.Get("url").String()
 		}
 		// QQ空间相片有不同的文件后缀名，那么不传后缀名的文件名下载的时候会自动获取到对应的文件扩展名
-		fileName = fmt.Sprintf("IMG_%s_%s_%s", shootdate[:8], shootdate[8:], Md5(sloc)[8:24])
+		fileName = fmt.Sprintf("IMG_%s_%s_%s", shootdate[:8], shootdate[8:], helper.Md5(sloc)[8:24])
 	}
 
 	// 检查是否启用了防重复下载开关,如果开启就忽略下载已经存在的
@@ -396,7 +396,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + path.Ext(p) + "\n" +
-					"相片/视频大小：" + FormatSize(fsize) + "\n" +
+					"相片/视频大小：" + helper.FormatSize(fsize) + "\n" +
 					"相片/视频地址：" + source + "\n"
 				fmt.Println(output)
 				m.Unlock()
@@ -406,11 +406,11 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	}
 
 	target := fmt.Sprintf("%s/%s", albumPath, fileName)
-	resp, err := Download(source, target, 5, 600, false)
+	resp, err := myhttp.Download(source, target, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
 		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
-		WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()), 1)
+		helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()), 1)
 		return
 	} else {
 		m.Lock()
@@ -428,18 +428,11 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
-			"相片/视频大小：" + FormatSize(fileInfo.Size()) + "\n" +
+			"相片/视频大小：" + helper.FormatSize(fileInfo.Size()) + "\n" +
 			"相片/视频地址：" + source + "\n"
 		fmt.Println(output)
 		m.Unlock()
 	}
-}
-
-func ReEnter(msg interface{}) {
-	fmt.Println(msg)
-	b := make([]byte, 1)
-	os.Stdin.Read(b)
-	os.Exit(0)
 }
 
 // 跟踪panic堆栈信息
@@ -469,14 +462,15 @@ func PanicTrace(kb int) []byte {
 func Heartbeat(ticker *time.Ticker) {
 	for t := range ticker.C {
 		t.Format("2006/01/02 15:04:05")
-		HttpGet(albumUrl, reqHeader)
+		myhttp.Get(albumUrl, reqHeader)
 	}
 }
 
+// 获取相册列表
 func GetAlbumList() (string, error) {
-	bytes, err := HttpGet(albumUrl, reqHeader)
+	bytes, err := myhttp.Get(albumUrl, reqHeader)
 	if err != nil {
-		ReEnter("获取相册列表出错：" + err.Error())
+		InputMenu("获取相册列表出错：" + err.Error())
 	}
 	str := string(bytes)
 	str = str[15:]
@@ -485,335 +479,28 @@ func GetAlbumList() (string, error) {
 	return albumList.String(), nil
 }
 
-func HttpGet(url string, msgs ...map[string]string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+// 
+func InputMenu(msg interface{}) {
+	fmt.Println(time.Now().Format("2006-01-02 15:04:05"), "（。・＿・。）ﾉ", msg)
+	var menus = []string{"********** 菜单选项 **********", "1. 再次重试", "2. 结束退出"}
+	for _, v := range menus {
+		fmt.Println(v)
 	}
-
-	headers := make(map[string]string)
-	if len(msgs) > 0 {
-		headers = msgs[0]
-	}
-
-	for key, val := range headers {
-		req.Header.Set(key, val)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP请求失败. 状态码：%s", resp.Status)
-	}
-
-	var buffer [512]byte
-	result := bytes.NewBuffer(nil)
+	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		n, err := resp.Body.Read(buffer[0:])
-		result.Write(buffer[0:n])
-		if err != nil && err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
+		fmt.Print("请输入数字再按回车键：")
+		scanner.Scan()
+		str := scanner.Text()
+		input, err := strconv.Atoi(str)
+		if err != nil || input < 1 || input > (len(menus)-1) {
+			fmt.Println("(T＿T)输入不正确，请输入菜单选项可选数字~~~")
+			continue
+		}
+		switch input {
+		case 1:
+			BeforeDownload()
+		case 2:
+			os.Exit(0)
 		}
 	}
-	return result.Bytes(), nil
-}
-
-// 判断所给路径是否为文件夹
-func IsDir(path string) bool {
-	s, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return s.IsDir()
-}
-
-// 判断所给路径是否为文件
-func IsFile(path string) bool {
-	s, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !s.IsDir()
-}
-
-// MD5加密
-func Md5(s string) string {
-	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
-}
-
-/*
- * 获取指定目录下的所有文件（包含子目录下的文件）
- * @param string dirPath 目录路径
- * @param interface{} msgs 可变参数，参数顺序 0：[]string files（字符串切片用于接收 目录路径 下所有文件，包含子目录下的文件）
- */
-func GetAllFiles(dirPath string, msgs ...interface{}) ([]string, error) {
-	fis, err := ioutil.ReadDir(dirPath)
-	if err != nil {
-		return nil, err
-	}
-
-	var files []string
-	if len(msgs) > 0 {
-		files = msgs[0].([]string)
-	} else {
-		files = make([]string, 0)
-	}
-
-	for _, fi := range fis {
-		if fi.IsDir() { // 目录, 递归遍历
-			files, _ = GetAllFiles(dirPath+"/"+fi.Name(), files)
-		} else {
-			files = append(files, dirPath+"/"+fi.Name())
-		}
-	}
-	return files, nil
-}
-
-/**
- * 创建文件并逐行写入内容
- * @param string filename 文件路径
- * @param string s 要写入的内容
- * @param int mode 写入模式，默认为0，0：覆盖，1：末尾追加
- */
-func WriteLog(filename string, s string, mode int) error {
-	if !IsFile(filename) {
-		dir := filepath.Dir(filename)
-		if !IsDir(dir) {
-			err := os.MkdirAll(dir, os.ModePerm)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	flag := os.O_WRONLY | os.O_CREATE // 默认覆盖模式
-	if mode == 1 {
-		flag = os.O_WRONLY | os.O_CREATE | os.O_APPEND // 追加模式
-	}
-
-	file, err := os.OpenFile(filename, flag, 0600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	_, err = file.Write([]byte(s + "\n"))
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-/**
- * 文件单位大小转换
- * @param int64 bytes 字节(b)
- */
-func FormatSize(bytes int64) string {
-	var size string
-	if bytes >= 1073741824 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1073741824), "GB")
-	} else if bytes >= 1048576 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1048576), "MB")
-	} else if bytes >= 1024 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1024), "KB")
-	} else if bytes > 1 {
-		size = fmt.Sprintf("%f %s", float64(bytes), "bytes")
-	} else if bytes == 1 {
-		size = fmt.Sprintf("%f %s", float64(bytes), "byte")
-	} else {
-		size = "0 bytes"
-	}
-	return size
-}
-
-/**
-* 远程文件下载，支持断点续传，支持实时进度显示
-* @param string uri 远程资源地址
-* @param string target 调用时传入文件名，如果支持断点续传时当程序超时程序会自动调用该方法重新下载，此时传入的是文件句柄
-* @param interface{} msgs 可变参数，参数顺序 0: retry int（下载失败后重试次数） 1：timeout int 超时，默认300s 2：progressbar bool 是否开启进度条，默认false
- */
-func Download(uri string, target string, msgs ...interface{}) (map[string]interface{}, error) {
-	filename := filepath.Base(target)
-	entension := filepath.Ext(target)
-	var targetDir string
-	if entension != "" {
-		filename = strings.Replace(filename, entension, "", 1)
-		targetDir = filepath.Dir(target)
-	} else {
-		lasti := strings.LastIndex(target, "/")
-		if lasti == -1 {
-			return nil, fmt.Errorf("Not the correct file address")
-		}
-		targetDir = target[:lasti]
-	}
-
-	if (!IsDir(targetDir)) {
-		os.MkdirAll(targetDir, os.ModePerm)
-	}
-
-	retry := 0
-	if len(msgs) > 0 {
-		retry = msgs[0].(int)
-	}
-
-	timeout := 300
-	if len(msgs) > 1 {
-		timeout = msgs[1].(int)
-	}
-
-	progressbar := false
-	if len(msgs) > 2 {
-		progressbar = msgs[2].(bool)
-	}
-
-	hresp, err := http.Get(uri)
-	if err != nil {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, fmt.Errorf("Failed to get response header, Error message → ", err.Error())
-		}
-	}
-	hresp.Body.Close()
-
-	contentRange := hresp.Header.Get("Content-Range")
-	acceptRanges := hresp.Header.Get("Accept-Ranges")
-	var ranges bool
-	if contentRange != "" || acceptRanges == "bytes" {
-		ranges = true
-	}
-
-	contentType := hresp.Header.Get("Content-Type")
-	if contentType != "" && entension == "" {
-		exts, err := mime.ExtensionsByType(contentType)
-		if err == nil && len(exts) > 0 {
-			entension = exts[0]
-			filename = fmt.Sprintf("%s%s", filename, entension)
-			target = fmt.Sprintf("%s/%s", targetDir, filename)
-		}
-	}
-
-	var (
-		size          int64 = 0
-		contentLength int64 = hresp.ContentLength
-	)
-
-	if IsFile(target) {
-		if ranges {
-			fileInfo, _ := os.Stat(target)
-			if fileInfo != nil {
-				size = fileInfo.Size()
-			}
-		} else {
-			if err := os.Remove(target); err != nil {
-				if retry > 0 {
-					return Download(uri, target, retry-1, timeout, progressbar)
-				} else {
-					return nil, err
-				}
-			}
-		}
-	}
-
-	res := make(map[string]interface{})
-	if size == contentLength {
-		res["filename"] = filename
-		res["dir"] = targetDir
-		res["path"] = target
-		return res, nil
-	}
-
-	req, err := http.NewRequest("GET", uri, nil)
-	if err != nil {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, err
-		}
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36")
-	if ranges {
-		req.Header.Set("Accept-Ranges", "bytes")
-		req.Header.Set("Range", fmt.Sprintf("bytes=%v-", size))
-	}
-
-	client := &http.Client{
-		Timeout: time.Second * time.Duration(timeout),
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, err
-		}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, fmt.Errorf("Http request was not successfully received and processed, status code is %v, status is %v", resp.StatusCode, resp.Status)
-		}
-	}
-
-	file, err := os.OpenFile(target, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
-	if err != nil {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, err
-		}
-	}
-	defer file.Close()
-
-	if progressbar {
-		reader := io.LimitReader(io.MultiReader(resp.Body), int64(resp.ContentLength))
-		bar := pbar.Full.Start64(resp.ContentLength)
-		barReader := bar.NewProxyReader(reader)
-		_, err := io.Copy(file, barReader)
-		bar.Finish()
-		if err != nil {
-			if retry > 0 {
-				return Download(uri, target, retry-1, timeout, progressbar)
-			} else {
-				return nil, err
-			}
-		}
-	} else {
-		_, err = io.Copy(file, resp.Body)
-		if err != nil {
-			if retry > 0 {
-				return Download(uri, target, retry-1, timeout, progressbar)
-			} else {
-				return nil, err
-			}
-		}
-	}
-
-	fi, _ := os.Stat(target)
-	if fi != nil {
-		size = fi.Size()
-	}
-
-	if contentLength != size {
-		return nil, fmt.Errorf("The source file and the target file size are inconsistent")
-	}
-
-	res["filename"] = filename
-	res["dir"] = targetDir
-	res["path"] = target
-	return res, nil
 }
