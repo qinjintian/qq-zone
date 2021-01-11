@@ -34,7 +34,7 @@ var (
 	waiterIn     sync.WaitGroup
 	waiterOut    sync.WaitGroup
 	haschan      chan int
-	m            sync.Mutex
+	mutex            sync.Mutex
 	albumSucc    uint64 = 0
 	total        uint64 = 0        // 相片/视频总数
 	succ         uint64 = 0        // 下载成功数
@@ -75,8 +75,7 @@ const dotted string = `
 ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
 
 func main() {
-
-	InputMenu("获取相册列表数据错误：xxx噢噢")
+	BeforeDownload()
 }
 
 func BeforeDownload() {
@@ -383,7 +382,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 				os.RemoveAll(localFiles[tmpName])
 			} else {
 				respHeader.Body.Close()
-				m.Lock()
+				mutex.Lock()
 				if photo.Get("is_video").Bool() {
 					videoNum++
 				} else {
@@ -399,7 +398,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 					"相片/视频大小：" + helper.FormatSize(fsize) + "\n" +
 					"相片/视频地址：" + source + "\n"
 				fmt.Println(output)
-				m.Unlock()
+				mutex.Unlock()
 				return
 			}
 		}
@@ -413,7 +412,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()), 1)
 		return
 	} else {
-		m.Lock()
+		mutex.Lock()
 		succ++
 		albumSucc++
 		newNum++
@@ -431,7 +430,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			"相片/视频大小：" + helper.FormatSize(fileInfo.Size()) + "\n" +
 			"相片/视频地址：" + source + "\n"
 		fmt.Println(output)
-		m.Unlock()
+		mutex.Unlock()
 	}
 }
 
