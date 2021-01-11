@@ -1,0 +1,7 @@
+/.idea
+*.exe
+*.exe~
+*.memprof
+*.pprof
+/storage
+nohup.out
