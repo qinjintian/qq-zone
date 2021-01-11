@@ -34,7 +34,7 @@ var (
 	waiterIn     sync.WaitGroup
 	waiterOut    sync.WaitGroup
 	haschan      chan int
-	mutex            sync.Mutex
+	mutex        sync.Mutex
 	albumSucc    uint64 = 0
 	total        uint64 = 0        // 相片/视频总数
 	succ         uint64 = 0        // 下载成功数
@@ -177,12 +177,14 @@ Start:
 	// 获取相册列表
 	albumList, err := GetAlbumList()
 	if err != nil {
-		InputMenu(fmt.Sprintf("获取相册列表数据错误，：%v", err.Error()))
+		fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ获取相册列表数据错误，：%v", err.Error()))
+		MenuSelection()
 	}
 
 	var albumListArr []gjson.Result = gjson.Parse(albumList).Array()
 	if len(albumListArr) < 1 {
-		InputMenu(fmt.Sprintf("没有获取到任何相册数据，可能输入参数有误或cookie已失效~~~", ))
+		fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ没有获取到任何相册数据，可能输入参数有误或cookie已失效~~~", ))
+		MenuSelection()
 	}
 
 	for _, album := range albumListArr {
@@ -193,7 +195,7 @@ Start:
 			}
 		}
 
-		albumPath := "./storage/qzone/album/" + name
+		albumPath := fmt.Sprintf("./storage/qzone/%v/album/%s", qq, name)
 		if !helper.IsDir(albumPath) {
 			os.MkdirAll(albumPath, os.ModePerm)
 		}
@@ -203,7 +205,7 @@ Start:
 			pageNum         int64 = 500
 			albumPaotoTotal int64 = 0
 			totalInAlbum    int64 = album.Get("total").Int()
-			i               int   = 1
+			photoPageNum    int   = 1
 		)
 
 		albumPhotos = make([]gjson.Result, 0)
@@ -211,7 +213,8 @@ Start:
 			photoListUrl := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
 			b, err := myhttp.Get(photoListUrl, reqHeader)
 			if err != nil {
-				InputMenu(fmt.Sprintf("获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), i, err.Error()))
+				fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error()))
+				MenuSelection()
 			}
 			photoJson := string(b)
 			photoJson = photoJson[15:]
@@ -225,7 +228,7 @@ Start:
 			if totalInAlbum == albumPaotoTotal { // 说明这个相册下载完成了
 				break
 			}
-			i++
+			photoPageNum++
 			pageStart += 500
 		}
 		total += uint64(len(albumPhotos)) // 累加相片/视频总数
@@ -271,27 +274,7 @@ Start:
 
 	fmt.Println()
 
-	var (
-		serial int
-		input  string
-	)
-
-	for {
-		if serial > 0 {
-			fmt.Println("\n请按Ctrl+C或输入stop退出程序...")
-		} else {
-			fmt.Println("请按Ctrl+C或输入stop退出程序...")
-		}
-		_, err := fmt.Scanln(&input)
-		if err != nil {
-			continue
-		}
-		fmt.Println("您输入的是：", input)
-		if input == "stop" {
-			break
-		}
-		serial++
-	}
+	MenuSelection()
 }
 
 func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, album gjson.Result, albumPath string) {
@@ -469,7 +452,8 @@ func Heartbeat(ticker *time.Ticker) {
 func GetAlbumList() (string, error) {
 	bytes, err := myhttp.Get(albumUrl, reqHeader)
 	if err != nil {
-		InputMenu("获取相册列表出错：" + err.Error())
+		fmt.Println("（。・＿・。）ﾉ获取相册列表出错：" + err.Error())
+		MenuSelection()
 	}
 	str := string(bytes)
 	str = str[15:]
@@ -478,10 +462,9 @@ func GetAlbumList() (string, error) {
 	return albumList.String(), nil
 }
 
-// 
-func InputMenu(msg interface{}) {
-	fmt.Println(time.Now().Format("2006-01-02 15:04:05"), "（。・＿・。）ﾉ", msg)
-	var menus = []string{"********** 菜单选项 **********", "1. 再次重试", "2. 结束退出"}
+// 菜单选项
+func MenuSelection() {
+	menus := []string{"********** 菜单选项 **********", "1. 再次重试", "2. 结束退出"}
 	for _, v := range menus {
 		fmt.Println(v)
 	}
