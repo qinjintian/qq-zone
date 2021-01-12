@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	myhttp "qq-zone/utils/net/http"
+	"github.com/Unknwon/goconfig"
 	"qq-zone/utils/qzone"
 	"qq-zone/utils/logger"
 	"qq-zone/utils/helper"

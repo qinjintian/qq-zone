@@ -6,13 +6,26 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"github.com/Unknwon/goconfig"
 )
 
-const (
-	DEFAULT_PATH string = "storage/logs/log.log" // 日志默认保存路径
-)
+var DefaultSavePath string = "storage/logs/log.log" // 日志默认保存路径
 
 type Logger struct {}
+
+func init() {
+	cfg, err := goconfig.LoadConfigFile("config/logger.ini")
+	if err != nil {
+		return
+	}
+
+	path, err := cfg.GetValue(goconfig.DEFAULT_SECTION, "DefaultSavePath")
+	if err != nil {
+		return
+	}
+
+	DefaultSavePath = path
+}
 
 func (l *Logger) record(msg interface{}, target string) error {
 	entension := filepath.Ext(target)
@@ -37,7 +50,7 @@ func (l *Logger) record(msg interface{}, target string) error {
 }
 
 func makepath(args ...interface{}) string {
-	target := DEFAULT_PATH
+	target := DefaultSavePath
 	if len(args) > 0 {
 		target = args[0].(string)
 	}
