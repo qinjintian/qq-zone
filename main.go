@@ -9,7 +9,6 @@ import (
 	_ "net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"qq-zone/utils/filer"
 	"qq-zone/utils/helper"
 	"qq-zone/utils/logger"
@@ -21,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"qq-zone/utils/office"
 )
 
 const LOG_PATH = "storage/logs/qzone/log.log"
@@ -79,7 +77,7 @@ const dotted string = `
 ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
 
 func main() {
-	//BeforeDownload()
+	BeforeDownload()
 }
 
 func BeforeDownload() {
