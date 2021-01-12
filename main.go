@@ -9,9 +9,11 @@ import (
 	_ "net/url"
 	"os"
 	"path"
-	"qq-zone/utils/helper"
 	myhttp "qq-zone/utils/net/http"
 	"qq-zone/utils/qzone"
+	"qq-zone/utils/logger"
+	"qq-zone/utils/helper"
+	"qq-zone/utils/fileer"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -20,7 +22,7 @@ import (
 	"time"
 )
 
-const logPath = "storage/logs/qzone/log.log"
+const LOG_PATH = "storage/logs/qzone/log.log"
 
 var (
 	qq           string
@@ -66,7 +68,7 @@ const dotted string = `
 ` + "````" + ` ':.          ':::::::::'                  ::::..
                    '.:::::'                    ':'` + "````" + `..
 
-※※※※※※※※※※QQ空间相册相片/视频下载器※※※※※※※※※※
+※※※※※※※※※※ QQ空间相册相片/ 视频下载器 ※※※※※※※※※
 
 说明：本程序基于GO语言多协程开发，绿色无毒，不存在收录用户数据等情况，请放心使用 ^_^
 使用：双击运行.exe可执行文件，然后根据终端提示操作即可，相片和日志文件默认存放在根目录storage文件夹
@@ -146,7 +148,7 @@ Start:
 	}
 
 	qrcode := "qrcode.png"
-	if helper.IsFile(qrcode) {
+	if fileer.IsFile(qrcode) {
 		os.Remove(qrcode)
 	}
 
@@ -196,7 +198,7 @@ Start:
 		}
 
 		albumPath := fmt.Sprintf("./storage/qzone/%v/album/%s", qq, name)
-		if !helper.IsDir(albumPath) {
+		if !fileer.IsDir(albumPath) {
 			os.MkdirAll(albumPath, os.ModePerm)
 		}
 
@@ -235,7 +237,7 @@ Start:
 
 		if prevent == "y" {
 			localFiles = make(map[string]string, 0)
-			fpaths, _ := helper.GetAllFiles(albumPath)
+			fpaths, _ := fileer.GetAllFiles(albumPath)
 			for _, fPath := range fpaths {
 				fName := path.Base(fPath)
 				fName = fName[:strings.LastIndex(fName, ".")]
@@ -286,7 +288,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		if e := recover(); e != nil {
 			// 打印栈信息
 			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
-			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))), 1)
+			logger.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
 		}
 	}()
 
@@ -309,8 +311,8 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		videoUrl := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, qq, qq)
 		b, err := myhttp.Get(videoUrl, reqHeader)
 		if err != nil {
-			fmt.Println(logPath, time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
-			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()), 1)
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
+			logger.Println(fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
 			return
 		}
 		videoJson := string(b)
@@ -320,7 +322,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		videos := videoData.Get("photos").Array()
 		if len(videos) < 1 {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl))
-			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl), 1)
+			logger.Println(fmt.Sprintf("%v 相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl))
 			return
 		}
 		picPosInPage := videoData.Get("picPosInPage").Int()
@@ -329,7 +331,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		// 状态为2的表示可以正常播放的视频，也就是已经转换并上传在QQ空间服务器上
 		if status != 2 {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("name").String()))
-			helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("url").String()), 1)
+			logger.Println(fmt.Sprintf("%v 相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, photo.Get("url").String()))
 			return
 		}
 		source = videoInfo["video_url"].String()
@@ -378,7 +380,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + path.Ext(p) + "\n" +
-					"相片/视频大小：" + helper.FormatSize(fsize) + "\n" +
+					"相片/视频大小：" + fileer.FormatBytes(fsize) + "\n" +
 					"相片/视频地址：" + source + "\n"
 				fmt.Println(output)
 				mutex.Unlock()
@@ -392,7 +394,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
 		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
-		helper.WriteLog(logPath, fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()), 1)
+		logger.Println(fmt.Sprintf("%v 相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), resourceType, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
 		return
 	} else {
 		mutex.Lock()
@@ -410,7 +412,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
-			"相片/视频大小：" + helper.FormatSize(fileInfo.Size()) + "\n" +
+			"相片/视频大小：" + fileer.FormatBytes(fileInfo.Size()) + "\n" +
 			"相片/视频地址：" + source + "\n"
 		fmt.Println(output)
 		mutex.Unlock()

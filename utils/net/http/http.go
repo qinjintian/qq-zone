@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"qq-zone/utils/helper"
+	"qq-zone/utils/fileer"
 	pbar "github.com/cheggaaa/pb/v3"
 )
 
@@ -70,12 +70,12 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	} else {
 		lasti := strings.LastIndex(target, "/")
 		if lasti == -1 {
-			return nil, fmt.Errorf("Not the correct file address")
+			return nil, fmt.Errorf("Not the correct fileer address")
 		}
 		targetDir = target[:lasti]
 	}
 
-	if (!helper.IsDir(targetDir)) {
+	if (!fileer.IsDir(targetDir)) {
 		os.MkdirAll(targetDir, os.ModePerm)
 	}
 
@@ -126,7 +126,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		contentLength int64 = hresp.ContentLength
 	)
 
-	if helper.IsFile(target) {
+	if fileer.IsFile(target) {
 		if ranges {
 			fileInfo, _ := os.Stat(target)
 			if fileInfo != nil {
@@ -231,7 +231,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	}
 
 	if contentLength != size {
-		return nil, fmt.Errorf("The source file and the target file size are inconsistent")
+		return nil, fmt.Errorf("The source fileer and the target fileer size are inconsistent")
 	}
 
 	res["filename"] = filename
