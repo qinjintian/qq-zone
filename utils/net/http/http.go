@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	pbar "github.com/cheggaaa/pb/v3"
 	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"qq-zone/utils/filer"
 	"strings"
 	"time"
-	"qq-zone/utils/fileer"
-	pbar "github.com/cheggaaa/pb/v3"
 )
 
 func Get(url string, msgs ...map[string]string) ([]byte, error) {
@@ -70,12 +70,12 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	} else {
 		lasti := strings.LastIndex(target, "/")
 		if lasti == -1 {
-			return nil, fmt.Errorf("Not the correct fileer address")
+			return nil, fmt.Errorf("Not the correct filer address")
 		}
 		targetDir = target[:lasti]
 	}
 
-	if (!fileer.IsDir(targetDir)) {
+	if (!filer.IsDir(targetDir)) {
 		os.MkdirAll(targetDir, os.ModePerm)
 	}
 
@@ -126,7 +126,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		contentLength int64 = hresp.ContentLength
 	)
 
-	if fileer.IsFile(target) {
+	if filer.IsFile(target) {
 		if ranges {
 			fileInfo, _ := os.Stat(target)
 			if fileInfo != nil {
@@ -231,7 +231,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	}
 
 	if contentLength != size {
-		return nil, fmt.Errorf("The source fileer and the target fileer size are inconsistent")
+		return nil, fmt.Errorf("The source filer and the target filer size are inconsistent")
 	}
 
 	res["filename"] = filename

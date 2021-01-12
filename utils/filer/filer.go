@@ -1,4 +1,4 @@
-package fileer
+package filer
 
 import (
 	"bufio"
@@ -171,8 +171,8 @@ func Copy(src, dst string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-
 	defer destination.Close()
+
 	nBytes, err := io.Copy(destination, source)
 	return nBytes, err
 }

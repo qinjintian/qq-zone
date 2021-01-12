@@ -9,7 +9,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-var DefaultSavePath string = "storage/logs/log.log" // 日志默认保存路径
+var DefaultSavePath = "storage/logs/log.log" // 日志默认保存路径
 
 type Logger struct {}
 
@@ -40,7 +40,7 @@ func (l *Logger) record(msg interface{}, target string) error {
 
 	file, err := os.OpenFile(target, os.O_APPEND|os.O_CREATE, 666)
 	if err != nil {
-		return errors.New(fmt.Sprintf("Could not create fileer %s", target))
+		return errors.New(fmt.Sprintf("Could not create filer %s", target))
 	}
 	defer file.Close()
 
