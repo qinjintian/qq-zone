@@ -3,115 +3,66 @@ package helper
 import (
 	"crypto/md5"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"path/filepath"
+	"math/rand"
+	"os/exec"
 )
-
-// 判断所给路径是否为文件夹
-func IsDir(path string) bool {
-	s, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return s.IsDir()
-}
-
-// 判断所给路径是否为文件
-func IsFile(path string) bool {
-	s, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !s.IsDir()
-}
 
 // MD5加密
 func Md5(s string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
 }
 
-/*
- * 获取指定目录下的所有文件（包含子目录下的文件）
- * @param string dirPath 目录路径
- * @param interface{} msgs 可变参数，参数顺序 0：[]string files（字符串切片用于接收 目录路径 下所有文件，包含子目录下的文件）
+/**
+ * 生成随机的字符串
+ * @param n int 随机字符串长度
  */
-func GetAllFiles(dirPath string, msgs ...interface{}) ([]string, error) {
-	fis, err := ioutil.ReadDir(dirPath)
-	if err != nil {
-		return nil, err
+func GetRandomString(n int) string {
+	s := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+	b := make([]byte, n)
+	for v := range b {
+		b[v] = s[rand.Intn(len(s))]
 	}
-
-	var files []string
-	if len(msgs) > 0 {
-		files = msgs[0].([]string)
-	} else {
-		files = make([]string, 0)
-	}
-
-	for _, fi := range fis {
-		if fi.IsDir() { // 目录, 递归遍历
-			files, _ = GetAllFiles(dirPath+"/"+fi.Name(), files)
-		} else {
-			files = append(files, dirPath+"/"+fi.Name())
-		}
-	}
-	return files, nil
+	return string(b)
 }
 
 /**
- * 创建文件并逐行写入内容
- * @param string filename 文件路径
- * @param string s 要写入的内容
- * @param int mode 写入模式，默认为0，0：覆盖，1：末尾追加
+ * exec 实时获取外部命令的执行输出到终端，参数和系统内置的exec.Command()用法基本一样
+ * @param name string 系统内置exec.Command()第一个参数一样
+ * @param mode int 运行模式，0：每一条命令执行完毕分别返回一次结果到终端  1：实时获取外部命令的执行输出到终端
+ * @param ...string 系统内置exec.Command()第二个参数一样
  */
-func WriteLog(filename string, s string, mode int) error {
-	if !IsFile(filename) {
-		dir := filepath.Dir(filename)
-		if !IsDir(dir) {
-			err := os.MkdirAll(dir, os.ModePerm)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	flag := os.O_WRONLY | os.O_CREATE // 默认覆盖模式
-	if mode == 1 {
-		flag = os.O_WRONLY | os.O_CREATE | os.O_APPEND // 追加模式
-	}
-
-	file, err := os.OpenFile(filename, flag, 0600)
+func Command(name string, mode int, arg ...string) error {
+	cmd := exec.Command(name, arg...)
+	// 获取输出对象，可以从该对象中读取输出结果
+	stdout, err := cmd.StdoutPipe()
+	cmd.Stderr = cmd.Stdout
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-	_, err = file.Write([]byte(s + "\n"))
-	if err != nil {
+	// 保证关闭输出流
+	defer stdout.Close()
+
+	// 运行命令
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+
+	// 从管道中实时获取输出并打印到终端
+	for {
+		buf := make([]byte, 1024)
+		_, err := stdout.Read(buf)
+		if mode == 1 {
+			fmt.Println(string(buf))
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// 等待执行完毕
+	if err = cmd.Wait(); err != nil {
 		return err
 	}
 	return nil
-}
-
-/**
- * 文件单位大小转换
- * @param int64 bytes 字节(b)
- */
-func FormatSize(bytes int64) string {
-	var size string
-	if bytes >= 1073741824 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1073741824), "GB")
-	} else if bytes >= 1048576 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1048576), "MB")
-	} else if bytes >= 1024 {
-		size = fmt.Sprintf("%.2f %s", (float64(bytes) / 1024), "KB")
-	} else if bytes > 1 {
-		size = fmt.Sprintf("%f %s", float64(bytes), "bytes")
-	} else if bytes == 1 {
-		size = fmt.Sprintf("%f %s", float64(bytes), "byte")
-	} else {
-		size = "0 bytes"
-	}
-	return size
 }
