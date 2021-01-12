@@ -22,33 +22,34 @@ import (
 	"time"
 )
 
-const LOG_PATH = "storage/logs/qzone/log.log"
-
 var (
-	qq           string
-	gtk          string
-	cookie       string
-	tasks        int
-	prevent      string
-	photoAlbums  string
-	reqHeader    map[string]string
-	albumUrl     string
-	waiterIn     sync.WaitGroup
-	waiterOut    sync.WaitGroup
-	haschan      chan int
-	mutex        sync.Mutex
-	albumSucc    uint64 = 0
-	total        uint64 = 0        // 相片/视频总数
-	succ         uint64 = 0        // 下载成功数
-	newNum       uint64 = 0        // 新增数
-	duplicateNum uint64 = 0        // 重复数
-	videoNum     uint64 = 0        // 视频数
-	imageNum     uint64 = 0        // 相片数
-	localFiles   map[string]string // 当前本地相册已经存在的文件
-	albumPhotos  []gjson.Result
+	qq          string
+	gtk         string
+	tasks       int
+	cookie      string
+	prevent     string
+	headers     map[string]string
+	mutex       sync.Mutex
+	haschan     chan int
+	waiterIn    sync.WaitGroup
+	waiterOut   sync.WaitGroup
+	total       uint64 = 0        // 相片/视频总数
+	addTotal    uint64 = 0        // 新增数
+	succTotal   uint64 = 0        // 下载成功数
+	repeatTotal uint64 = 0        // 重复数
+	videoTotal  uint64 = 0        // 视频数
+	imageTotal  uint64 = 0        // 相片数
+	albumSucc   uint64 = 0        // 正在下载的相册相片成功数
+	localFiles  map[string]string // 当前本地相册已经存在的文件
+	photos      []gjson.Result
 )
 
-const dotted string = `
+func main() {
+	BeforeDownload()
+}
+
+func BeforeDownload() {
+	dotted := `
                    .::::.
                  .::::::::.
                 :::::::::::
@@ -72,15 +73,10 @@ const dotted string = `
 
 说明：本程序基于GO语言多协程开发，绿色无毒，不存在收录用户数据等情况，请放心使用 ^_^
 使用：双击运行.exe可执行文件，然后根据终端提示操作即可，相片和日志文件默认存放在根目录storage文件夹
-技巧：为占了能满带宽满速下载，100兆宽带最佳并行下载数为8~15，200兆16~30，以此类推，实际使用可根据自身情况调整
+技巧：为了能占满带宽满速下载，100兆宽带最佳并行下载数为8~15，200兆16~30，以此类推，实际使用可根据自身情况调整
 
 ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
 
-func main() {
-	BeforeDownload()
-}
-
-func BeforeDownload() {
 	fmt.Println(dotted)
 
 Start:
@@ -132,13 +128,13 @@ Start:
 
 	fmt.Printf("请输入要下载的相册名，多个相册用空格键隔开，格式[相册1 相册2]，不输入默认下载全部相册：")
 	scanner.Scan()
-	photoAlbums = scanner.Text()
+	albumNameStrs := scanner.Text()
 
-	var albs []string
-	if photoAlbums != "" {
-		albs = strings.Split(photoAlbums, " ")
+	var albumNames []string
+	if albumNameStrs != "" {
+		albumNames = strings.Split(albumNameStrs, " ")
 	} else {
-		albs = []string{}
+		albumNames = []string{}
 	}
 
 	res, err := qzone.Login()
@@ -161,23 +157,23 @@ Start:
 
 	// 指定要下载的相册
 	whitelist := make(map[string]bool)
-	for _, name := range albs {
+	for _, name := range albumNames {
 		whitelist[name] = true
 	}
 
 	time.Sleep(time.Second * 3)
 
-	reqHeader = make(map[string]string)
-	reqHeader["cookie"] = cookie
-	reqHeader["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
-	albumUrl = fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", gtk, qq, qq)
+	headers = make(map[string]string)
+	headers["cookie"] = cookie
+	headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+	albumListUrl := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", gtk, qq, qq)
 
 	// 定时发送心跳，防止cookie过期
 	ticker := time.NewTicker(time.Minute * 10)
-	go Heartbeat(ticker)
+	go Heartbeat(albumListUrl, ticker)
 
 	// 获取相册列表
-	albumList, err := GetAlbumList()
+	albumList, err := GetAlbumList(albumListUrl)
 	if err != nil {
 		fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ获取相册列表数据错误，：%v", err.Error()))
 		MenuSelection()
@@ -210,10 +206,10 @@ Start:
 			photoPageNum          = 1
 		)
 
-		albumPhotos = make([]gjson.Result, 0)
+		photos = make([]gjson.Result, 0)
 		for {
 			photoListUrl := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
-			b, err := myhttp.Get(photoListUrl, reqHeader)
+			b, err := myhttp.Get(photoListUrl, headers)
 			if err != nil {
 				fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error()))
 				MenuSelection()
@@ -224,7 +220,7 @@ Start:
 			photoData := gjson.Parse(photoJson)
 			photoData = photoData.Get("data")
 			photoList := photoData.Get("photoList").Array()
-			albumPhotos = append(albumPhotos, photoList...)
+			photos = append(photos, photoList...)
 			totalInPage := photoData.Get("totalInPage").Int()
 			albumPaotoTotal += totalInPage
 			if totalInAlbum == albumPaotoTotal { // 说明这个相册下载完成了
@@ -233,7 +229,7 @@ Start:
 			photoPageNum++
 			pageStart += 500
 		}
-		total += uint64(len(albumPhotos)) // 累加相片/视频总数
+		total += uint64(len(photos)) // 累加相片/视频总数
 
 		if prevent == "y" {
 			localFiles = make(map[string]string, 0)
@@ -250,11 +246,11 @@ Start:
 
 		albumSucc = 0 // 重新初始化为0
 		// 正在下载处理
-		for key, photo := range albumPhotos {
+		for key, photo := range photos {
 			waiterIn.Add(1)
 			waiterOut.Add(1)
 			haschan <- 1
-			go StartDownload(key, photo, albumPhotos, album, albumPath)
+			go StartDownload(key, photo, photos, album, albumPath)
 		}
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
@@ -265,13 +261,13 @@ Start:
 	ticker.Stop()
 
 	if prevent == "y" {
-		if duplicateNum > 0 {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ), duplicateNum))
+		if repeatTotal > 0 {
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ), duplicateNum))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 		}
 	} else {
-		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succ, imageNum, videoNum, newNum, (total - succ)))
+		fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
 	}
 
 	fmt.Println()
@@ -279,7 +275,7 @@ Start:
 	MenuSelection()
 }
 
-func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, album gjson.Result, albumPath string) {
+func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjson.Result, albumPath string) {
 	defer func() {
 		<-haschan
 		waiterIn.Done()
@@ -309,7 +305,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 	if photo.Get("is_video").Bool() {
 		resourceType = "视频"
 		videoUrl := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, qq, qq)
-		b, err := myhttp.Get(videoUrl, reqHeader)
+		b, err := myhttp.Get(videoUrl, headers)
 		if err != nil {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
 			logger.Println(fmt.Sprintf("%v 相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), videoUrl, err.Error()))
@@ -373,14 +369,14 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			} else {
 				mutex.Lock()
 				if photo.Get("is_video").Bool() {
-					videoNum++
+					videoTotal++
 				} else {
-					imageNum++
+					imageTotal++
 				}
-				succ++
+				succTotal++
 				albumSucc++
-				duplicateNum++
-				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumSucc, len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+				repeatTotal++
+				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumSucc, len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + path.Ext(p) + "\n" +
@@ -402,17 +398,17 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 		return
 	} else {
 		mutex.Lock()
-		succ++
+		succTotal++
 		albumSucc++
-		newNum++
+		addTotal++
 		if photo.Get("is_video").Bool() {
-			videoNum++
+			videoTotal++
 		} else {
-			imageNum++
+			imageTotal++
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc), len(albumPhotos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc), len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
@@ -447,16 +443,16 @@ func PanicTrace(kb int) []byte {
 }
 
 // 定时发送心跳，防止cookie过期
-func Heartbeat(ticker *time.Ticker) {
+func Heartbeat(url string, ticker *time.Ticker) {
 	for t := range ticker.C {
 		t.Format("2006/01/02 15:04:05")
-		myhttp.Get(albumUrl, reqHeader)
+		myhttp.Get(url, headers)
 	}
 }
 
 // 获取相册列表
-func GetAlbumList() (string, error) {
-	b, err := myhttp.Get(albumUrl, reqHeader)
+func GetAlbumList(url string) (string, error) {
+	b, err := myhttp.Get(url, headers)
 	if err != nil {
 		fmt.Println("（。・＿・。）ﾉ获取相册列表出错：" + err.Error())
 		MenuSelection()
