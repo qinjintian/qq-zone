@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os/exec"
+	"time"
 )
 
 // MD5加密
@@ -23,6 +24,7 @@ func Md5(s string) string {
 func GetRandomString(n int) string {
 	s := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 	b := make([]byte, n)
+	rand.Seed(time.Now().UnixNano())
 	for v := range b {
 		b[v] = s[rand.Intn(len(s))]
 	}
