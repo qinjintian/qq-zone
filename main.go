@@ -23,16 +23,16 @@ import (
 )
 
 var (
-	qq          string
-	gtk         string
-	tasks       int
-	cookie      string
-	prevent     string
-	headers     map[string]string
+	qq          string			 // 你的QQ号，要下载相册相片/QQ号
+	gtk         string			 // 登陆成功后通过算法拿到的g_tk参数
+	tasks       int				 // 并行下载的任务数
+	cookie      string			 // 登陆成功跳转到空间主页的cookie
+	prevent     string			 // 是否开启防重复下载，本地已存在即跳过
+	headers     map[string]string // 公共请求头
 	mutex       sync.Mutex
-	haschan     chan int
-	waiterIn    sync.WaitGroup
-	waiterOut   sync.WaitGroup
+	haschan     chan int		  // 缓冲信道控制并行下载的任务数
+	waiterIn    sync.WaitGroup    // 等待当前相册下载完才能继续下一个相册
+	waiterOut   sync.WaitGroup	  // 等待所有相片下载完才能继续往下执行
 	total       uint64 = 0        // 相片/视频总数
 	addTotal    uint64 = 0        // 新增数
 	succTotal   uint64 = 0        // 下载成功数
@@ -41,7 +41,7 @@ var (
 	imageTotal  uint64 = 0        // 相片数
 	albumSucc   uint64 = 0        // 正在下载的相册相片成功数
 	localFiles  map[string]string // 当前本地相册已经存在的文件
-	photos      []gjson.Result
+	photos      []gjson.Result		
 )
 
 func main() {
