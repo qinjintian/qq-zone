@@ -1,8 +1,12 @@
 package helper
 
 import (
+	"bytes"
 	"crypto/md5"
 	"fmt"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
+	"io/ioutil"
 	"math/rand"
 	"os/exec"
 )
@@ -23,6 +27,32 @@ func GetRandomString(n int) string {
 		b[v] = s[rand.Intn(len(s))]
 	}
 	return string(b)
+}
+
+/**
+ * gbk编码转utf-8编码
+ * @param string s gbk字符串
+ */
+func GbkToUtf8(s string) (string, error) {
+	reader := transform.NewReader(bytes.NewReader([]byte(s)), simplifiedchinese.GBK.NewDecoder())
+	d, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return string(d), nil
+}
+
+/**
+ * UTF-8编码转gbk编码
+ * @param string s utf-8字符串
+ */
+func Utf8ToGbk(s string) (string, error) {
+	reader := transform.NewReader(bytes.NewReader([]byte(s)), simplifiedchinese.GBK.NewEncoder())
+	d, err := ioutil.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return string(d), nil
 }
 
 /**

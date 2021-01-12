@@ -9,18 +9,19 @@ import (
 	_ "net/url"
 	"os"
 	"path"
-	myhttp "qq-zone/utils/net/http"
-	"github.com/Unknwon/goconfig"
-	"qq-zone/utils/qzone"
-	"qq-zone/utils/logger"
+	"path/filepath"
+	"qq-zone/utils/filer"
 	"qq-zone/utils/helper"
-	"qq-zone/utils/fileer"
+	"qq-zone/utils/logger"
+	myhttp "qq-zone/utils/net/http"
+	"qq-zone/utils/qzone"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"qq-zone/utils/office"
 )
 
 const LOG_PATH = "storage/logs/qzone/log.log"
@@ -78,7 +79,7 @@ const dotted string = `
 ※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
 
 func main() {
-	BeforeDownload()
+	//BeforeDownload()
 }
 
 func BeforeDownload() {
@@ -149,7 +150,7 @@ Start:
 	}
 
 	qrcode := "qrcode.png"
-	if fileer.IsFile(qrcode) {
+	if filer.IsFile(qrcode) {
 		os.Remove(qrcode)
 	}
 
@@ -199,7 +200,7 @@ Start:
 		}
 
 		albumPath := fmt.Sprintf("./storage/qzone/%v/album/%s", qq, name)
-		if !fileer.IsDir(albumPath) {
+		if !filer.IsDir(albumPath) {
 			os.MkdirAll(albumPath, os.ModePerm)
 		}
 
@@ -207,8 +208,8 @@ Start:
 			pageStart       int64 = 0
 			pageNum         int64 = 500
 			albumPaotoTotal int64 = 0
-			totalInAlbum    int64 = album.Get("total").Int()
-			photoPageNum    int   = 1
+			totalInAlbum          = album.Get("total").Int()
+			photoPageNum          = 1
 		)
 
 		albumPhotos = make([]gjson.Result, 0)
@@ -238,7 +239,7 @@ Start:
 
 		if prevent == "y" {
 			localFiles = make(map[string]string, 0)
-			fpaths, _ := fileer.GetAllFiles(albumPath)
+			fpaths, _ := filer.GetAllFiles(albumPath)
 			for _, fPath := range fpaths {
 				fName := path.Base(fPath)
 				fName = fName[:strings.LastIndex(fName, ".")]
@@ -364,10 +365,14 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			fileInfo, _ := os.Stat(p)
 			fsize := fileInfo.Size()
 			respHeader, err := http.Get(source)
-			if err != nil || respHeader == nil || respHeader.ContentLength != fsize {
+			if err != nil {
+				os.RemoveAll(localFiles[tmpName])
+			}
+			respHeader.Body.Close()
+
+			if respHeader.ContentLength != fsize {
 				os.RemoveAll(localFiles[tmpName])
 			} else {
-				respHeader.Body.Close()
 				mutex.Lock()
 				if photo.Get("is_video").Bool() {
 					videoNum++
@@ -381,7 +386,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + path.Ext(p) + "\n" +
-					"相片/视频大小：" + fileer.FormatBytes(fsize) + "\n" +
+					"相片/视频大小：" + filer.FormatBytes(fsize) + "\n" +
 					"相片/视频地址：" + source + "\n"
 				fmt.Println(output)
 				mutex.Unlock()
@@ -413,7 +418,7 @@ func StartDownload(key int, photo gjson.Result, albumPhotos []gjson.Result, albu
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
-			"相片/视频大小：" + fileer.FormatBytes(fileInfo.Size()) + "\n" +
+			"相片/视频大小：" + filer.FormatBytes(fileInfo.Size()) + "\n" +
 			"相片/视频地址：" + source + "\n"
 		fmt.Println(output)
 		mutex.Unlock()
@@ -425,7 +430,7 @@ func PanicTrace(kb int) []byte {
 	s := []byte("/src/runtime/panic.go")
 	e := []byte("\ngoroutine ")
 	line := []byte("\n")
-	stack := make([]byte, kb<<10) //4KB
+	stack := make([]byte, kb<<10) // 4KB
 	length := runtime.Stack(stack, true)
 	start := bytes.Index(stack, s)
 	stack = stack[start:length]
@@ -453,12 +458,12 @@ func Heartbeat(ticker *time.Ticker) {
 
 // 获取相册列表
 func GetAlbumList() (string, error) {
-	bytes, err := myhttp.Get(albumUrl, reqHeader)
+	b, err := myhttp.Get(albumUrl, reqHeader)
 	if err != nil {
 		fmt.Println("（。・＿・。）ﾉ获取相册列表出错：" + err.Error())
 		MenuSelection()
 	}
-	str := string(bytes)
+	str := string(b)
 	str = str[15:]
 	str = str[:strings.LastIndex(str, ")")]
 	albumList := gjson.Get(str, "data.albumListModeSort")
