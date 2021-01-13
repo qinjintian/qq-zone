@@ -22,4 +22,8 @@ QQ空间爬虫，多协程并发下载相册的相片/视频
 #### _**对于不想看代码实现过程，只想直接可以运行使用的情况可以直接下载 qq-zone.exe 可执行文件到本地电脑直接双击运行即可**_
 
 #### 截图
-![使用截图](./截图.png)
+![截图.png](https://static.studygolang.com/210113/6b7d4bd1925a15d773f849e0b103ffc4.png)
+
+#### GITHUB代码已开源，传送门 [https://github.com/qinjintian/qq-zone](https://github.com/qinjintian/qq-zone)
+
+### 若项目思路对您有帮助，请不吝点个赞呗~~~ 在此谢过!!!
