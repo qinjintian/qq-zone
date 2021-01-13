@@ -1,12 +1,14 @@
 package logger
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"github.com/Unknwon/goconfig"
 	"log"
 	"os"
 	"path/filepath"
-	"github.com/Unknwon/goconfig"
+	"runtime"
 )
 
 var DefaultSavePath = "storage/logs/log.log" // 日志默认保存路径
@@ -66,4 +68,31 @@ func Info(msg interface{}, args ...interface{}) {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+// 获取Panic堆栈信息追踪
+func PanicTrace(args ...int) []byte {
+	kb := 1
+	if len(args) > 0 {
+		kb = args[0]
+	}
+	s := []byte("/src/runtime/panic.go")
+	e := []byte("\ngoroutine ")
+	line := []byte("\n")
+	stack := make([]byte, kb<<10) // 4KB
+	length := runtime.Stack(stack, true)
+	start := bytes.Index(stack, s)
+	stack = stack[start:length]
+	start = bytes.Index(stack, line) + 1
+	stack = stack[start:]
+	end := bytes.LastIndex(stack, line)
+	if end != -1 {
+		stack = stack[:end]
+	}
+	end = bytes.Index(stack, e)
+	if end != -1 {
+		stack = stack[:end]
+	}
+	stack = bytes.TrimRight(stack, "\n")
+	return stack
 }

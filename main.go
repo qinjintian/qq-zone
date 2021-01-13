@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"github.com/tidwall/gjson"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	myhttp "qq-zone/utils/net/http"
 	"qq-zone/utils/qzone"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,25 +21,25 @@ import (
 )
 
 var (
-	qq          string // 你的QQ号，要下载相册相片/QQ号
-	gtk         string // 登陆成功后通过算法拿到的g_tk参数
-	tasks       int    // 并行下载的任务数
-	cookie      string // 登陆成功跳转到空间主页的cookie
-	prevent     string // 是否开启防重复下载，本地已存在即跳过
-	mutex       sync.Mutex
-	haschan     chan int          // 缓冲信道控制并行下载的任务数
-	waiterIn    sync.WaitGroup    // 等待当前相册下载完才能继续下一个相册
-	waiterOut   sync.WaitGroup    // 等待所有相片下载完才能继续往下执行
-	headers     map[string]string // 公共请求头
-	total       uint64 = 0        // 相片/视频总数
-	addTotal    uint64 = 0        // 新增数
-	succTotal   uint64 = 0        // 下载成功数
-	repeatTotal uint64 = 0        // 重复数
-	videoTotal  uint64 = 0        // 视频数
-	imageTotal  uint64 = 0        // 相片数
-	albumSucc   uint64 = 0        // 正在下载的相册相片成功数
-	photos      []gjson.Result
-	localFiles  map[string]string // 当前本地相册已经存在的文件
+	qq                  string            // 你的QQ号，要下载相册相片/QQ号
+	gtk                 string            // 登陆成功后通过算法拿到的g_tk参数
+	tasks               int               // 并行下载的任务数
+	cookie              string            // 登陆成功跳转到空间主页的cookie
+	prevent             bool              // 是否开启防重复下载，本地已存在即跳过
+	mutex               sync.Mutex        // 互斥锁，下载数累加解决竞态
+	haschan             chan int          // 缓冲信道控制并行下载的任务数
+	waiterIn            sync.WaitGroup    // 等待当前相册下载完才能继续下一个相册
+	waiterOut           sync.WaitGroup    // 等待所有相片下载完才能继续往下执行
+	headers             map[string]string // 公共请求头
+	total               uint64 = 0        // 相片/视频总数
+	addTotal            uint64 = 0        // 新增数
+	succTotal           uint64 = 0        // 下载成功数
+	repeatTotal         uint64 = 0        // 重复数
+	videoTotal          uint64 = 0        // 视频数
+	imageTotal          uint64 = 0        // 相片数
+	albumPhotoSuccTotal uint64 = 0        // 正在下载的相册相片成功数
+	photos              []gjson.Result    // 当前相册相片
+	localFiles          map[string]string // 当前本地相册已经存在的文件
 )
 
 func main() {
@@ -113,12 +111,11 @@ Start:
 	for {
 		fmt.Printf("是否开启防重复下载，可选[y/n]，默认是y：")
 		scanner.Scan()
-		prevent = scanner.Text()
-		if prevent == "" {
-			prevent = "y"
+		str := strings.ToLower(scanner.Text())
+		if str == "" || str == "y" {
+			prevent = true
 		} else {
-			prevent = strings.ToLower(prevent)
-			if prevent != "y" && prevent != "n" {
+			if str != "y" && str != "n" {
 				fmt.Println("防重复下载输入不正确，可选[y/n]，请重新输入~")
 				continue
 			}
@@ -139,7 +136,7 @@ Start:
 
 	res, err := qzone.Login()
 	if err != nil {
-		fmt.Println("登录QQ空间异常，正在根据提示重新输入，退出请按Ctrl+Z")
+		fmt.Println("（。・＿・。）ﾉ登录QQ空间异常，正在根据提示重新输入，退出请按Ctrl+Z")
 		goto Start
 	}
 
@@ -231,7 +228,7 @@ Start:
 		}
 		total += uint64(len(photos)) // 累加相片/视频总数
 
-		if prevent == "y" {
+		if prevent {
 			localFiles = make(map[string]string, 0)
 			fpaths, _ := filer.GetAllFiles(albumPath)
 			for _, fPath := range fpaths {
@@ -244,7 +241,7 @@ Start:
 			os.MkdirAll(albumPath, os.ModePerm)
 		}
 
-		albumSucc = 0 // 重新初始化为0
+		albumPhotoSuccTotal = 0 // 重新初始化为0
 		// 正在下载处理
 		for key, photo := range photos {
 			waiterIn.Add(1)
@@ -260,7 +257,7 @@ Start:
 	waiterOut.Wait()
 	ticker.Stop()
 
-	if prevent == "y" {
+	if prevent {
 		if repeatTotal > 0 {
 			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 		} else {
@@ -281,10 +278,10 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 		waiterIn.Done()
 		waiterOut.Done()
 
-		if e := recover(); e != nil {
+		if err := recover(); err != nil {
 			// 打印栈信息
-			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
-			logger.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(PanicTrace(1))))
+			fmt.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(logger.PanicTrace())))
+			logger.Println(fmt.Sprintf("%v 相册[%s]第%d个相片/视频下载过程异常，相片/视频名：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), album.Get("name").String(), (key + 1), photo.Get("name").String(), string(logger.PanicTrace())))
 		}
 	}()
 
@@ -347,7 +344,7 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 	}
 
 	// 检查是否启用了防重复下载开关,如果开启就忽略下载已经存在的
-	if prevent == "y" && len(localFiles) > 0 {
+	if prevent && len(localFiles) > 0 {
 		pos := strings.LastIndex(fileName, ".")
 		tmpName := fileName
 		if pos != -1 {
@@ -374,9 +371,9 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 					imageTotal++
 				}
 				succTotal++
-				albumSucc++
+				albumPhotoSuccTotal++
 				repeatTotal++
-				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumSucc, len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumPhotoSuccTotal, len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + path.Ext(p) + "\n" +
@@ -399,7 +396,7 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 	} else {
 		mutex.Lock()
 		succTotal++
-		albumSucc++
+		albumPhotoSuccTotal++
 		addTotal++
 		if photo.Get("is_video").Bool() {
 			videoTotal++
@@ -408,7 +405,7 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumSucc), len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", (albumPhotoSuccTotal), len(photos), album.Get("name").String(), (key + 1), resourceType) + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
@@ -417,29 +414,6 @@ func StartDownload(key int, photo gjson.Result, photos []gjson.Result, album gjs
 		fmt.Println(output)
 		mutex.Unlock()
 	}
-}
-
-// 跟踪panic堆栈信息
-func PanicTrace(kb int) []byte {
-	s := []byte("/src/runtime/panic.go")
-	e := []byte("\ngoroutine ")
-	line := []byte("\n")
-	stack := make([]byte, kb<<10) // 4KB
-	length := runtime.Stack(stack, true)
-	start := bytes.Index(stack, s)
-	stack = stack[start:length]
-	start = bytes.Index(stack, line) + 1
-	stack = stack[start:]
-	end := bytes.LastIndex(stack, line)
-	if end != -1 {
-		stack = stack[:end]
-	}
-	end = bytes.Index(stack, e)
-	if end != -1 {
-		stack = stack[:end]
-	}
-	stack = bytes.TrimRight(stack, "\n")
-	return stack
 }
 
 // 定时发送心跳，防止cookie过期
