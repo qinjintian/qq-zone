@@ -71,8 +71,6 @@ func Command(name string, mode int, arg ...string) error {
 	if err != nil {
 		return err
 	}
-
-	// 保证关闭输出流
 	defer stdout.Close()
 
 	// 运行命令
