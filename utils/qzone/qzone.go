@@ -3,23 +3,22 @@ package qzone
 import (
 	"errors"
 	"fmt"
+	"github.com/tidwall/gjson"
 	"io"
 	"math/rand"
 	"net/http"
-	myhttp "qq-zone/utils/net/http"
 	pkgurl "net/url"
 	"os"
+	myhttp "qq-zone/utils/net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var headers map[string]string
-
-func init() {
-	headers = make(map[string]string)
-	headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"
-}
+const (
+	QRCODE_SAVE_PATH = "qrcode.png"
+	USER_AGENT       = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"
+)
 
 // 登录获取g_tk和cookie参数才能进入相册
 func Login() (map[string]string, error) {
@@ -54,8 +53,11 @@ StartLoop:
 
 	qrsig := strings.Replace(strings.Split(header.Get("Set-Cookie"), ";")[0], "qrsig=", "", 1)
 	ptqrtoken := ptqrtoken(qrsig)
-	res := make(map[string]string)
-	var isFirstLoop bool
+
+	var (
+		isFirstLoop bool
+		res         = make(map[string]string)
+	)
 
 OuterLoop:
 	for {
@@ -101,7 +103,7 @@ OuterLoop:
 // 检查用户是否扫描成功以及是否登录成功
 func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 	header := make(map[string]string)
-	header["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"
+	header["user-agent"] = USER_AGENT
 	header["cookie"] = fmt.Sprintf("qrsig=%s;", qrsig)
 	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", pkgurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
 	b, err := myhttp.Get(url, header)
@@ -125,7 +127,7 @@ func getQRC() (http.Header, error) {
 	}
 	defer resp.Body.Close()
 
-	file, err := os.OpenFile("qrcode.png", os.O_RDWR|os.O_CREATE, 0666)
+	file, err := os.OpenFile(QRCODE_SAVE_PATH, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +151,7 @@ func getLoginSig() (string, error) {
 
 	setCookies := resp.Header.Values("Set-Cookie")
 	if len(setCookies) < 1 {
-		return "", errors.New("获取login_sig参数时错误，请稍后重试")
+		return "", errors.New("获取login_sig参数错误，请稍后重试")
 	}
 
 	var loginSig string
@@ -165,7 +167,7 @@ func getLoginSig() (string, error) {
 	}
 
 	if loginSig == "" {
-		return "", errors.New("获取login_sig参数时错误，请稍后重试")
+		return "", errors.New("获取login_sig参数错误，请稍后重试")
 	}
 	return loginSig, nil
 }
@@ -239,4 +241,79 @@ func gtk(skey string) string {
 		h += (h << 5) + int(skey[i])
 	}
 	return strconv.Itoa(h & 2147483647)
+}
+
+// 获取相册列表地址
+func GetAlbumListUrl(qq string, g_tk string) string {
+	return fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, qq, qq)
+}
+
+// 获取相册列表数据
+func GetAlbumList(url string, header map[string]string) (string, error) {
+	b, err := myhttp.Get(url, header)
+	if err != nil {
+		return "", fmt.Errorf("（。・＿・。）ﾉ获取相册列表出错：%s", err.Error())
+	}
+
+	u, err := pkgurl.Parse(url)
+	if err != nil {
+		return "", err
+	}
+
+	callbackFunName := u.Query().Get("callbackFun") + "_Callback"
+	str := string(b)
+	str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
+	if !gjson.Valid(str) {
+		return "", fmt.Errorf("invalid json")
+	}
+
+	cade := gjson.Get(str, "code").Int()
+	if cade != 0 {
+		return "", fmt.Errorf(gjson.Get(str, "message").String())
+	}
+	albumList := gjson.Get(str, "data.albumListModeSort")
+	return albumList.String(), nil
+}
+
+// 获取相片列表数据
+func GetPhotoList(qq string, cookie string, gtk string, album gjson.Result) ([]gjson.Result, error) {
+	header := make(map[string]string)
+	header["cookie"] = cookie
+	header["user-agent"] = USER_AGENT
+	var (
+		pageNum      int64 = 500
+		pageStart    int64 = 0
+		photoTotal   int64 = 0
+		photoPageNum       = 1
+		totalInAlbum       = album.Get("total").Int()
+	)
+
+	photos := make([]gjson.Result, 0)
+	for {
+		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
+		b, err := myhttp.Get(url, header)
+		if err != nil {
+			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error())
+		}
+
+		u, err := pkgurl.Parse(url)
+		if err != nil {
+			return nil, err
+		}
+
+		callbackFunName := u.Query().Get("callbackFun") + "_Callback"
+		str := string(b)
+		str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
+		res := gjson.Parse(str)
+		data := res.Get("data")
+		list := data.Get("photoList").Array()
+		photos = append(photos, list...)
+		photoTotal += data.Get("totalInPage").Int()
+		if totalInAlbum == photoTotal { // 说明这个相册下载完成了
+			break
+		}
+		photoPageNum++
+		pageStart += 500
+	}
+	return photos, nil
 }
