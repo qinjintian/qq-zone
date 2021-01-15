@@ -91,23 +91,22 @@ Start:
 		break
 	}
 
-	task := 0
+	task := 1
 	for {
 		fmt.Printf("请输入1~100之间的下载并行任务数，默认为1：")
 		scanner.Scan()
 		str := scanner.Text()
-		if str == "" {
-			task = 1
-		} else {
-			task, err := strconv.Atoi(str)
-			if err != nil || task < 1 || task > 100 {
+		if str != "" {
+			t, err := strconv.Atoi(str)
+			if err != nil || t < 1 || t > 100 {
 				fmt.Println("并行下载任务数不正确，输入范围为1~100之间的整数，请重新输入~")
 				continue
 			}
+			task = t
 		}
 		break
 	}
-
+	
 	exclude := false
 	for {
 		fmt.Printf("是否开启防重复下载，可选[y/n]，默认是y：")
@@ -413,6 +412,7 @@ func (q *QzoneController) menu() {
 	for _, v := range menus {
 		fmt.Println(v)
 	}
+	fmt.Println()
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("请输入数字再按回车键：")
