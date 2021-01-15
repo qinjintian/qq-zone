@@ -97,16 +97,17 @@ Start:
 		scanner.Scan()
 		str := scanner.Text()
 		if str != "" {
-			t, err := strconv.Atoi(str)
-			if err != nil || t < 1 || t > 100 {
+			task, _ = strconv.Atoi(str)
+			if task < 1 || task > 100 {
 				fmt.Println("并行下载任务数不正确，输入范围为1~100之间的整数，请重新输入~")
 				continue
 			}
-			task = t
+		} else {
+			task = 1
 		}
 		break
 	}
-	
+
 	exclude := false
 	for {
 		fmt.Printf("是否开启防重复下载，可选[y/n]，默认是y：")
@@ -245,7 +246,7 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 	q.menu()
 }
 
-func (q *QzoneController) StartDownload(qq string, gtk string, cookie string, key int, photo gjson.Result, album gjson.Result, apath string, photoTotal int, exclude bool) {
+func (q *QzoneController) StartDownload(qq, gtk, cookie string, key int, photo, album gjson.Result, apath string, photoTotal int, exclude bool) {
 	defer func() {
 		<-chans
 		waiterIn.Done()
