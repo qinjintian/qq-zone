@@ -27,8 +27,8 @@ type QzoneController struct {
 }
 
 var (
+	chans               chan int       // 缓冲信道控制并行下载的任务数
 	mutex               sync.Mutex     // 互斥锁，下载数累加解决竞态
-	haschan             chan int       // 缓冲信道控制并行下载的任务数
 	waiterIn            sync.WaitGroup // 等待当前相册下载完才能继续下一个相册
 	waiterOut           sync.WaitGroup // 等待所有相片下载完才能继续往下执行
 	total               uint64 = 0     // 相片/视频总数
@@ -152,7 +152,7 @@ Start:
 
 	gtk := res["g_tk"]
 	cookie := res["cookie"]
-	haschan = make(chan int, task)
+	chans = make(chan int, task)
 
 	fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("登录成功，^_^欢迎%s，%s", res["nickname"], "程序即将开始下载~~~~"))
 	fmt.Println()
@@ -221,14 +221,14 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 		for key, photo := range photos {
 			waiterIn.Add(1)
 			waiterOut.Add(1)
-			haschan <- 1
+			chans <- 1
 			go q.StartDownload(qq, gtk, cookie, key, photo, album, apath, photoTotal, exclude)
 		}
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
 
 	waiterOut.Wait()
-	close(haschan)
+	close(chans)
 	q.ticker.Stop()
 
 	if exclude {
@@ -248,7 +248,7 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 
 func (q *QzoneController) StartDownload(qq string, gtk string, cookie string, key int, photo gjson.Result, album gjson.Result, apath string, photoTotal int, exclude bool) {
 	defer func() {
-		<-haschan
+		<-chans
 		waiterIn.Done()
 		waiterOut.Done()
 
