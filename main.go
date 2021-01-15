@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	(&controllers.QzoneController{}).Cmd()
+	controllers.Cmd()
 }

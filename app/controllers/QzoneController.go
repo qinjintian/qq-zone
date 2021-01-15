@@ -42,7 +42,7 @@ var (
 
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
 
-func (q *QzoneController) Cmd() {
+func Cmd() {
 	dotted := `
                    .::::.
                  .::::::::.
@@ -63,16 +63,19 @@ func (q *QzoneController) Cmd() {
 ` + "````" + ` ':.          ':::::::::'                  ::::..
                    '.:::::'                    ':'` + "````" + `..
 
-※※※※※※※※※※ QQ空间相册相片/ 视频下载器 ※※※※※※※※※
+※※※※※※※※ QQ空间相册相片/ 视频下载器 ※※※※※※※
 
 说明：本程序基于GO语言多协程开发，绿色无毒，不存在收录用户数据等情况，请放心使用 ^_^
 使用：双击运行.exe可执行文件，然后根据终端提示操作即可，相片和日志文件默认存放在根目录storage文件夹
 技巧：为了能占满带宽满速下载，100兆宽带最佳并行下载数为8~15，200兆16~30，以此类推，实际使用可根据自身情况调整
-
-※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※※`
-
+`
 	fmt.Println(dotted)
 
+	(&QzoneController{}).menu()
+}
+
+// 我的相册
+func (q *QzoneController) myAlbum() {
 Start:
 	scanner := bufio.NewScanner(os.Stdin)
 	qq := ""
@@ -164,19 +167,19 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 	header["cookie"] = cookie
 	header["user-agent"] = USER_AGENT
 
-	url := qzone.GetAlbumListUrl(qq, gtk)
+	url := qzone.GetAlbumListUrl(qq, qq, gtk)
 	go q.heartbeat(url, header)
 
 	list, err := qzone.GetAlbumList(url, header)
 	if err != nil {
 		fmt.Println(err)
-		q.menuSelection()
+		q.menu()
 	}
 
 	var albums = gjson.Parse(list).Array()
 	if len(albums) < 1 {
 		fmt.Println("（。・＿・。）ﾉ 该账号没有相册~~~")
-		q.menuSelection()
+		q.menu()
 	}
 
 	for _, album := range albums {
@@ -187,30 +190,30 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 			}
 		}
 
-		albumPath := fmt.Sprintf("./storage/qzone/%v/album/%s", qq, name)
-		if !filer.IsDir(albumPath) {
-			os.MkdirAll(albumPath, os.ModePerm)
+		apath := fmt.Sprintf("./storage/qzone/%v/album/%s", qq, name)
+		if !filer.IsDir(apath) {
+			os.MkdirAll(apath, os.ModePerm)
 		}
 
 		photos, err := qzone.GetPhotoList(qq, cookie, gtk, album)
 		if err != nil {
 			fmt.Println(err.Error())
-			q.menuSelection()
+			q.menu()
 		}
 		photoTotal := len(photos)
 		total += uint64(photoTotal) // 累加相片/视频总数
 
 		if exclude {
 			q.localFiles = make(map[string]string, 0)
-			files, _ := filer.GetAllFiles(albumPath)
+			files, _ := filer.GetAllFiles(apath)
 			for _, path := range files {
 				filename := filepath.Base(path)
 				filename = filename[:strings.LastIndex(filename, ".")]
 				q.localFiles[filename] = path
 			}
 		} else {
-			os.RemoveAll(albumPath) // 把当前本地相册删掉重新创建空相册然后下载文件，相当于清空目录资源
-			os.MkdirAll(albumPath, os.ModePerm)
+			os.RemoveAll(apath) // 把当前本地相册删掉重新创建空相册然后下载文件，相当于清空目录资源
+			os.MkdirAll(apath, os.ModePerm)
 		}
 
 		albumPhotoSuccTotal = 0 // 重新初始化为0
@@ -219,7 +222,7 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 			waiterIn.Add(1)
 			waiterOut.Add(1)
 			haschan <- 1
-			go q.StartDownload(qq, gtk, cookie, key, photo, album, albumPath, photoTotal, exclude)
+			go q.StartDownload(qq, gtk, cookie, key, photo, album, apath, photoTotal, exclude)
 		}
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
@@ -240,10 +243,10 @@ func (q *QzoneController) readyDownload(qq string, cookie string, gtk string, ex
 
 	fmt.Println()
 
-	q.menuSelection()
+	q.menu()
 }
 
-func (q *QzoneController) StartDownload(qq string, gtk string, cookie string, key int, photo gjson.Result, album gjson.Result, albumPath string, photoTotal int, exclude bool) {
+func (q *QzoneController) StartDownload(qq string, gtk string, cookie string, key int, photo gjson.Result, album gjson.Result, apath string, photoTotal int, exclude bool) {
 	defer func() {
 		<-haschan
 		waiterIn.Done()
@@ -365,7 +368,7 @@ func (q *QzoneController) StartDownload(qq string, gtk string, cookie string, ke
 		}
 	}
 
-	target := fmt.Sprintf("%s/%s", albumPath, filename)
+	target := fmt.Sprintf("%s/%s", apath, filename)
 	resp, err := myhttp.Download(source, target, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
@@ -405,8 +408,8 @@ func (q *QzoneController) heartbeat(url string, header map[string]string) {
 }
 
 // 菜单选项
-func (q *QzoneController) menuSelection() {
-	menus := []string{"********** 菜单选项 **********", "1. 再次重试", "2. 结束退出"}
+func (q *QzoneController) menu() {
+	menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 下载相册相片/视频", "⒉ 结束退出"}
 	for _, v := range menus {
 		fmt.Println(v)
 	}
@@ -422,7 +425,7 @@ func (q *QzoneController) menuSelection() {
 		}
 		switch input {
 		case 1:
-			q.Cmd()
+			q.myAlbum()
 		case 2:
 			os.Exit(0)
 		}

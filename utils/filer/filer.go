@@ -181,7 +181,7 @@ func Copy(src, dst string) (int64, error) {
  * 返回文件的MD5校验值(适合计算小文件和大文件 md5 值)
  * @param string filePath 文件地址
  */
-func Md5Sum(filePath string) (string, error) {
+func Md5(filePath string) (string, error) {
 	if !IsFile(filePath) {
 		return "", fmt.Errorf("%s 文件不存在，请检查", filePath)
 	}
