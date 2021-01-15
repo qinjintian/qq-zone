@@ -244,8 +244,8 @@ func gtk(skey string) string {
 }
 
 // 获取相册列表地址
-func GetAlbumListUrl(qq string, g_tk string) string {
-	return fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, qq, qq)
+func GetAlbumListUrl(hostUin string, uin string, g_tk string) string {
+	return fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, hostUin, uin)
 }
 
 // 获取相册列表数据
@@ -316,4 +316,31 @@ func GetPhotoList(qq string, cookie string, gtk string, album gjson.Result) ([]g
 		pageStart += 500
 	}
 	return photos, nil
+}
+
+// 获取QQ好友
+func GetFriends(url string, header map[string]string) (string, error) {
+	b, err := myhttp.Get(url, header)
+	if err != nil {
+		return "", fmt.Errorf("（。・＿・。）ﾉ获取好友列表出错：%s", err.Error())
+	}
+
+	u, err := pkgurl.Parse(url)
+	if err != nil {
+		return "", err
+	}
+
+	callbackFunName := u.Query().Get("callbackFun") + "_Callback"
+	str := string(b)
+	str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
+	if !gjson.Valid(str) {
+		return "", fmt.Errorf("invalid json")
+	}
+
+	cade := gjson.Get(str, "code").Int()
+	if cade != 0 {
+		return "", fmt.Errorf(gjson.Get(str, "message").String())
+	}
+	friends := gjson.Get(str, "data.items_list")
+	return friends.String(), nil
 }
