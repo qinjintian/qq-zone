@@ -276,7 +276,7 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 }
 
 // 获取相片列表数据
-func GetPhotoList(qq string, cookie string, gtk string, album gjson.Result) ([]gjson.Result, error) {
+func GetPhotoList(hostUin, uin, cookie, gtk string, album gjson.Result) ([]gjson.Result, error) {
 	header := make(map[string]string)
 	header["cookie"] = cookie
 	header["user-agent"] = USER_AGENT
@@ -290,7 +290,7 @@ func GetPhotoList(qq string, cookie string, gtk string, album gjson.Result) ([]g
 
 	photos := make([]gjson.Result, 0)
 	for {
-		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, qq, album.Get("id").String(), qq, pageStart, pageNum)
+		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, hostUin, album.Get("id").String(), uin, pageStart, pageNum)
 		b, err := myhttp.Get(url, header)
 		if err != nil {
 			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error())
@@ -318,8 +318,8 @@ func GetPhotoList(qq string, cookie string, gtk string, album gjson.Result) ([]g
 	return photos, nil
 }
 
-// 获取QQ好友
-func GetFriends(url string, header map[string]string) (string, error) {
+// 获取我的QQ好友
+func GetMyFriends(url string, header map[string]string) (string, error) {
 	b, err := myhttp.Get(url, header)
 	if err != nil {
 		return "", fmt.Errorf("（。・＿・。）ﾉ获取好友列表出错：%s", err.Error())
@@ -344,3 +344,4 @@ func GetFriends(url string, header map[string]string) (string, error) {
 	friends := gjson.Get(str, "data.items_list")
 	return friends.String(), nil
 }
+

@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	controllers.Cmd()
+	controllers.Spider()
 }
