@@ -2,6 +2,5 @@
 *.exe~
 *.memprof
 *.pprof
-*.png
 /storage
 nohup.out

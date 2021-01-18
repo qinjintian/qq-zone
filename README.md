@@ -26,7 +26,7 @@ QQ相册可以说是存放了好大一部分人生活的点点滴滴，近段时
 
 #### 截图
 
-![image](https://github.com/qinjintian/qq-zone/master/screenshot.png?raw=true)
+![image](https://github.com/qinjintian/qq-zone/blob/main/screenshot.png?raw=true)
 
 #### GITHUB代码已开源，传送门 [https://github.com/qinjintian/qq-zone](https://github.com/qinjintian/qq-zone)
 
