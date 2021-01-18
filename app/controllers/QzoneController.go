@@ -40,7 +40,10 @@ var (
 	albumPhotoSuccTotal uint64 = 0     // 正在下载的相册相片成功数
 )
 
-const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+const (
+	QRCODE = "qrcode.png"
+	USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+)
 
 func Spider() {
 	dotted := `
@@ -159,9 +162,8 @@ Start:
 	}
 
 	// 登陆成功之后删掉二维码
-	qrcode := "qrcode.png"
-	if filer.IsFile(qrcode) {
-		os.Remove(qrcode)
+	if filer.IsFile(QRCODE) {
+		os.Remove(QRCODE)
 	}
 
 	gtk := res["g_tk"]
@@ -419,7 +421,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 }
 
 // 获取对我开放空间权限的好友
-func (q *QzoneController) getOpenAccess(option int) {
+func (q *QzoneController) getAccess(option int) {
 Start:
 	scanner := bufio.NewScanner(os.Stdin)
 	qq := ""
@@ -447,9 +449,8 @@ Start:
 	time.Sleep(time.Second * 3)
 
 	// 登陆成功之后删掉二维码
-	qrcode := "qrcode.png"
-	if filer.IsFile(qrcode) {
-		os.Remove(qrcode)
+	if filer.IsFile(QRCODE) {
+		os.Remove(QRCODE)
 	}
 
 	gtk := res["g_tk"]
@@ -501,8 +502,9 @@ Start:
 			if option == 1 {
 				fmt.Println(fmt.Sprintf("账号：%v  昵称：%v", hostUin, nickname))
 			} else {
-				if len(gjson.Parse(str).Array()) > 0 {
-					fmt.Println(fmt.Sprintf("账号：%v  昵称：%v", hostUin, nickname))
+				totalInPageModeSort := len(gjson.Parse(str).Array())
+				if totalInPageModeSort > 0 {
+					fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：", hostUin, nickname, totalInPageModeSort))
 				}
 			}
 		}()
@@ -548,9 +550,9 @@ func (q *QzoneController) menu() {
 		case 2:
 			q.spiderAlbum(2)
 		case 3:
-			q.getOpenAccess(1)
+			q.getAccess(1)
 		case 4:
-			q.getOpenAccess(2)
+			q.getAccess(2)
 		case 5:
 			os.Exit(0)
 		}
