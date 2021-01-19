@@ -304,7 +304,14 @@ func GetPhotoList(hostUin, uin, cookie, gtk string, album gjson.Result) ([]gjson
 		callbackFunName := u.Query().Get("callbackFun") + "_Callback"
 		str := string(b)
 		str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
+		if !gjson.Valid(str) {
+			return nil, fmt.Errorf("invalid json")
+		}
 		res := gjson.Parse(str)
+		cade := res.Get("code").Int()
+		if cade != 0 {
+			return nil, fmt.Errorf(res.Get("message").String())
+		}
 		data := res.Get("data")
 		list := data.Get("photoList").Array()
 		photos = append(photos, list...)
