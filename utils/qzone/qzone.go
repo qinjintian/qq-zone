@@ -1,6 +1,7 @@
 package qzone
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/tidwall/gjson"
@@ -245,7 +246,7 @@ func gtk(skey string) string {
 
 // 获取相册列表地址
 func GetAlbumListUrl(hostUin string, uin string, g_tk string) string {
-	return fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, hostUin, uin)
+	return fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, hostUin, uin)
 }
 
 // 获取相册列表数据
@@ -267,12 +268,47 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 		return "", fmt.Errorf("invalid json")
 	}
 
-	cade := gjson.Get(str, "code").Int()
-	if cade != 0 {
+	result := gjson.Parse(str)
+	if result.Get("code").Int() != 0 {
 		return "", fmt.Errorf(gjson.Get(str, "message").String())
 	}
-	albumList := gjson.Get(str, "data.albumListModeSort")
-	return albumList.String(), nil
+
+	albumList := ""
+	mode := result.Get("data.mode").Int()
+	switch mode {
+	case 2:
+		// 展示设置 - 普通视图
+		albumList = result.Get("data.albumListModeSort").String()
+	case 3:
+		// 展示设置 - 分类视图
+		albumsInUser := result.Get("data.albumsInUser").Int()
+		if albumsInUser == 0 {
+			return "", fmt.Errorf("（。・＿・。）ﾉ 该账号没有获取到任何相册哦~~")
+		}
+		albumResult := make([]interface{}, 0)
+		albumListModeClass := result.Get("data.albumListModeClass").Array()
+		for _, items := range albumListModeClass {
+			totalInPage := items.Get("totalInPage").Int()
+			if totalInPage > 0 {
+				albumListArrs := items.Get("albumList").Array()
+				for _, album := range albumListArrs {
+					albumResult = append(albumResult, album.Value())
+				}
+			}
+		}
+
+		b , err := json.Marshal(albumResult)
+		if err != nil {
+			return "", err
+		}
+		str := string(b)
+		if gjson.Valid(str) {
+			albumList = str
+		} else {
+			return "", fmt.Errorf("（。・＿・。）ﾉ 该账号没有获取到任何相册哦~~")
+		}
+	}
+	return albumList, nil
 }
 
 // 获取相片列表数据

@@ -173,7 +173,7 @@ Start:
 	fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("登录成功，^_^欢迎%s，%s", res["nickname"], "程序即将开始下载~~~~"))
 	fmt.Println()
 
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 2)
 
 	q.readyDownload(qq, friendQQ, cookie, gtk, exclude)
 }
@@ -452,7 +452,7 @@ Start:
 	fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("登录成功，^_^欢迎%s，%s", res["nickname"], "程序将马上为您查询~~~~"))
 	fmt.Println()
 
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 2)
 
 	// 登陆成功之后删掉二维码
 	if filer.IsFile(QRCODE) {
@@ -499,7 +499,7 @@ Start:
 				}
 			}()
 
-			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&t=918823097&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shined", gtk, hostUin, qq)
+			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine0", gtk, hostUin, qq)
 			body, err := qzone.GetAlbumList(url, header)
 			if err != nil {
 				return
