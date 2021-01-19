@@ -485,7 +485,7 @@ Start:
 	for _, val := range friends {
 		swg.Add(1)
 		ch <- 1
-		go func() {
+		go func(val gjson.Result) {
 			hostUin := val.Get("uin").String()
 			nickname := val.Get("name").String()
 			defer func() {
@@ -500,7 +500,7 @@ Start:
 			}()
 
 			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&t=918823097&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shined", gtk, hostUin, qq)
-			str, err := qzone.GetAlbumList(url, header)
+			body, err := qzone.GetAlbumList(url, header)
 			if err != nil {
 				return
 			}
@@ -508,7 +508,7 @@ Start:
 			if option == 1 {
 				fmt.Println(fmt.Sprintf("账号：%v  昵称：%v", hostUin, nickname))
 			} else {
-				albums := gjson.Parse(str).Array()
+				albums := gjson.Parse(body).Array()
 				totalInPageModeSort := len(albums) // totalInPageModeSort 包含了需要密码才能访问的相册
 				if totalInPageModeSort > 0 {
 					// 排除掉需要密码才能访问的相册
@@ -529,11 +529,11 @@ Start:
 							}
 							displays += val + " "
 						}
-						fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：%v 相册名[仅显示前面6个]：%v", hostUin, nickname, totalInPageModeSort, displays))
+						fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：%v 相册名[大于6个时仅显示前面6个]：%v", hostUin, nickname, totalInPageModeSort, displays))
 					}
 				}
 			}
-		}()
+		}(val)
 	}
 
 	swg.Wait()
