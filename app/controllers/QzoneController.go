@@ -202,11 +202,17 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 
 	var albums = gjson.Parse(list).Array()
 	if len(albums) < 1 {
-		fmt.Println("（。・＿・。）ﾉ 该账号没有相册~~~")
+		fmt.Println(fmt.Sprintf("（。・＿・。）ﾉ 该账号( %v )没有可访问的相册~~~", hostUin))
 		q.menu()
 	}
 
 	for _, album := range albums {
+		// 跳过没有无权访问的相册
+		if album.Get("allowAccess").Int() == 0 {
+			continue
+		}
+
+		// 跳过不在白名单中的相册
 		name := album.Get("name").String()
 		if len(q.whitelist) > 0 {
 			if _, ok := q.whitelist[name]; !ok {
@@ -502,9 +508,29 @@ Start:
 			if option == 1 {
 				fmt.Println(fmt.Sprintf("账号：%v  昵称：%v", hostUin, nickname))
 			} else {
-				totalInPageModeSort := len(gjson.Parse(str).Array())
+				albums := gjson.Parse(str).Array()
+				totalInPageModeSort := len(albums) // totalInPageModeSort 包含了需要密码才能访问的相册
 				if totalInPageModeSort > 0 {
-					fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：", hostUin, nickname, totalInPageModeSort))
+					// 排除掉需要密码才能访问的相册
+					allowAccess := make([]string, 0)
+					for _, album := range albums {
+						if album.Get("allowAccess").Int() == 0 {
+							totalInPageModeSort--
+							continue
+						}
+						allowAccess = append(allowAccess, album.Get("name").String())
+					}
+
+					if totalInPageModeSort > 0 {
+						displays := ""
+						for key, val := range allowAccess {
+							if key >= 6 {
+								break
+							}
+							displays += val + " "
+						}
+						fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：%v 相册名[仅显示前面6个]：%v", hostUin, nickname, totalInPageModeSort, displays))
+					}
 				}
 			}
 		}()
