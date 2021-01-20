@@ -276,24 +276,19 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 	albumList := ""
 	mode := result.Get("data.mode").Int()
 	switch mode {
+	case 0:
+		albumList = result.Get("data.albumList").String()
 	case 2:
 		// 展示设置 - 普通视图
 		albumList = result.Get("data.albumListModeSort").String()
 	case 3:
 		// 展示设置 - 分类视图
-		albumsInUser := result.Get("data.albumsInUser").Int()
-		if albumsInUser == 0 {
-			return "", fmt.Errorf("（。・＿・。）ﾉ 该账号没有获取到任何相册哦~~")
-		}
 		albumResult := make([]interface{}, 0)
 		albumListModeClass := result.Get("data.albumListModeClass").Array()
 		for _, items := range albumListModeClass {
-			totalInPage := items.Get("totalInPage").Int()
-			if totalInPage > 0 {
-				albumListArrs := items.Get("albumList").Array()
-				for _, album := range albumListArrs {
-					albumResult = append(albumResult, album.Value())
-				}
+			albumListArrs := items.Get("albumList").Array()
+			for _, album := range albumListArrs {
+				albumResult = append(albumResult, album.Value())
 			}
 		}
 
@@ -301,6 +296,7 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+
 		str := string(b)
 		if gjson.Valid(str) {
 			albumList = str
