@@ -97,19 +97,25 @@ Start:
 		break
 	}
 
-	friendQQ := ""
+	friendQQ := make([]string, 0)
 	if option == 2 {
+	friendOuterLoop:
 		for {
-			fmt.Printf("请输入您好友的QQ号，留空代表全部：")
+			fmt.Printf("请输入您好友的QQ号，多个QQ号用空格键隔开，格式[514092640 707220871]：")
 			scanner.Scan()
-			friendQQ = scanner.Text()
-			if friendQQ == "" {
-				break
-			}
-			_, err := strconv.ParseInt(friendQQ, 10, 64)
-			if err != nil {
-				fmt.Println("（。・＿・。）ﾉ您的好友QQ号不正确，请重新输入~")
+			str := scanner.Text()
+			if str == "" {
+				fmt.Println("（。・＿・。）您好友的QQ号不能为空，请重新输入~")
 				continue
+			}
+
+			friendQQ = strings.Split(str, " ")
+			for key, fqq := range friendQQ {
+				_, err := strconv.ParseInt(fqq, 10, 64)
+				if err != nil {
+					fmt.Println(fmt.Sprintf("您的好友QQ号的第%d个账号不正确，请重新输入~", (key+1)))
+					continue friendOuterLoop
+				}
 			}
 			break
 		}
@@ -183,18 +189,11 @@ Start:
 	time.Sleep(time.Second * 2)
 
 	// 为空时自动爬取开放qq相册权限的好友
-	if option == 2 && friendQQ == "" {
-		// 有时候QQ空间明明有相册但是获取到的却是空的，这应该是tx的问题，因为我多次尝试使用自己的小号在浏览器登陆进入相册，我的账号是有相册的，但是不管怎么刷新都没显示出相册来
-		qqs, err := q.openAccess(qq, cookie, gtk)
-		if err != nil {
-			fmt.Println("（。・＿・。）ﾉ获取对你开放空间的好友出现异常，正在根据提示重新输入，退出请按Ctrl+Z")
-			q.menu()
-		}
-
+	if option == 2 {
 	OuterLoop:
-		for _, friendQQ := range qqs {
+		for _, fqq := range friendQQ {
 			q.initResult() // 初始化结果
-			err := q.readyDownload(qq, friendQQ, cookie, gtk, exclude)
+			err := q.readyDownload(qq, fqq, cookie, gtk, exclude)
 			if err != nil {
 				fmt.Println(err)
 				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个任务", "⒉ 结束退出"}
@@ -224,34 +223,32 @@ Start:
 
 			if exclude {
 				if repeatTotal > 0 {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), friendQQ, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 				} else {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), friendQQ, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 				}
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), friendQQ, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
 			}
+
+			// 睡眠N秒再进行下一个账号
+			time.Sleep(time.Second * 3)
 		}
 	} else {
-		err := q.readyDownload(qq, friendQQ, cookie, gtk, exclude)
+		err := q.readyDownload(qq, "", cookie, gtk, exclude)
 		if err != nil {
 			fmt.Println(err)
 			q.menu()
 		}
 
-		hostUin := qq
-		if friendQQ != "" {
-			hostUin = friendQQ
-		}
-
 		if exclude {
 			if repeatTotal > 0 {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), hostUin, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), hostUin, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
 			}
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), hostUin, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
 		}
 	}
 }
@@ -334,7 +331,6 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 	}
 
 	waiterOut.Wait()
-	close(chans)
 	q.ticker.Stop()
 	return nil
 }
@@ -449,6 +445,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 				albumPhotoSuccTotal++
 				repeatTotal++
 				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), (key + 1), cate) + "\n" +
+					"当前/账号信息：" + hostUin + "\n" +
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
 					"相片/视频名称：" + tmpName + filepath.Ext(p) + "\n" +
@@ -481,6 +478,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
 		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), (key + 1), cate) + "\n" +
+			"当前/账号信息：" + hostUin + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
 			"相片/视频名称：" + resp["filename"].(string) + "\n" +
@@ -602,61 +600,6 @@ Start:
 	swg.Wait()
 	close(ch)
 	q.menu()
-}
-
-func (q *QzoneController) openAccess(qq, cookie, gtk string) ([]string, error) {
-	url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/r.qzone.qq.com/cgi-bin/tfriend/friend_ship_manager.cgi?uin=%v&do=1&fupdate=1&clean=1&g_tk=%v", qq, gtk)
-	header := make(map[string]string)
-	header["cookie"] = cookie
-	header["user-agent"] = USER_AGENT
-	str, err := qzone.GetMyFriends(url, header)
-	if err != nil {
-		return nil, err
-	}
-
-	ch := make(chan int, 1)
-	wg := &sync.WaitGroup{}
-	qqs := make([]string, 10)
-	friends := gjson.Parse(str).Array()
-	for _, val := range friends {
-		wg.Add(1)
-		ch <- 1
-		go func(val gjson.Result) {
-			hostUin := val.Get("uin").String()
-			nickname := val.Get("name").String()
-			defer func() {
-				<-ch
-				wg.Done()
-
-				if err := recover(); err != nil {
-					// 打印栈信息
-					fmt.Println(fmt.Sprintf("%v QQ号：%v  昵称：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), hostUin, nickname, string(logger.PanicTrace())))
-					logger.Println(fmt.Sprintf("%v QQ号：%v  昵称：%v  Panic信息：%v", time.Now().Format("2006/01/02 15:04:05"), hostUin, nickname, string(logger.PanicTrace())))
-				}
-			}()
-
-			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine0", gtk, hostUin, qq)
-			body, err := qzone.GetAlbumList(url, header)
-			if err != nil {
-				return
-			}
-			albums := gjson.Parse(body).Array() // 包含了需要密码才能访问的相册
-			totalInPageModeSort := len(albums)
-			if totalInPageModeSort > 0 {
-				// 排除掉需要密码才能访问的相册
-				for _, album := range albums {
-					if album.Get("allowAccess").Int() == 1 {
-						mutex.Lock()
-						qqs = append(qqs, hostUin)
-						mutex.Unlock()
-						return
-					}
-				}
-			}
-		}(val)
-	}
-	wg.Wait()
-	return qqs, nil
 }
 
 // 定时发送心跳，防止cookie过期
