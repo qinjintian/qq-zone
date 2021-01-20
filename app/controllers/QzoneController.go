@@ -297,11 +297,16 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 			}
 		}
 
-		apath := fmt.Sprintf("./storage/qzone/%v/album/%s", hostUin, name)
-		if !filer.IsDir(apath) {
-			if os.MkdirAll(apath, os.ModePerm) != nil {
-				continue
-			}
+		baseDir := fmt.Sprintf("./storage/qzone/%v/album/", hostUin)
+		if name[len(name)-1:] == "." {
+			name = strings.ReplaceAll(name, ".", "")
+		}
+		apath := fmt.Sprintf("%v%v", baseDir, name)
+	RetryCreateDir:
+		err := os.MkdirAll(apath, os.ModePerm)
+		if err != nil {
+			apath = fmt.Sprintf("%v%v", baseDir, helper.Md5(name)[8:24])
+			goto RetryCreateDir
 		}
 
 		photos, err := qzone.GetPhotoList(hostUin, uin, cookie, gtk, album)
