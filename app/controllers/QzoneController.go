@@ -193,10 +193,11 @@ Start:
 	OuterLoop:
 		for _, fqq := range friendQQ {
 			q.initResult() // 初始化结果
+		Retry:
 			err := q.readyDownload(qq, fqq, cookie, gtk, exclude)
 			if err != nil {
 				fmt.Println(err)
-				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个任务", "⒉ 结束退出"}
+				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个账号", "⒉ 重试该账号", "⒊ 结束退出"}
 				fmt.Println()
 				for _, v := range menus {
 					fmt.Println(v)
@@ -216,6 +217,8 @@ Start:
 					case 1:
 						continue OuterLoop
 					case 2:
+						goto Retry
+					case 3:
 						os.Exit(0)
 					}
 				}
@@ -296,7 +299,9 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 
 		apath := fmt.Sprintf("./storage/qzone/%v/album/%s", hostUin, name)
 		if !filer.IsDir(apath) {
-			os.MkdirAll(apath, os.ModePerm)
+			if os.MkdirAll(apath, os.ModePerm) != nil {
+				continue
+			}
 		}
 
 		photos, err := qzone.GetPhotoList(hostUin, uin, cookie, gtk, album)
