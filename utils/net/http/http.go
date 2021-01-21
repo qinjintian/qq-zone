@@ -62,20 +62,23 @@ func Get(url string, headers map[string]string) ([]byte, error) {
 /**
  * 表单POST请求
  * @param string url 接口地址
- * @param map[string]string params 表单数据，以FormData形式提交
+ * @param map[string]string params 表单数据，以JSON形式提交
  */
-func PostFormData(url string, params map[string]string, headers map[string]string) ([]byte, error) {
-	var data = pkgurl.Values{}
+func PostJson(url string, params map[string]interface{}, headers map[string]string) ([]byte, error) {
+	var bodyJson []byte
 	if params != nil {
-		for key, val := range params {
-			data.Set(key, val)
+		var err error
+		bodyJson, err = json.Marshal(params)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	req, err := http.NewRequest("POST", url, strings.NewReader(data.Encode()))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyJson))
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Content-Type", "application/json")
 
 	if headers != nil {
 		for key, val := range headers {
@@ -103,24 +106,20 @@ func PostFormData(url string, params map[string]string, headers map[string]strin
 /**
  * 表单POST请求
  * @param string url 接口地址
- * @param map[string]string params 表单数据，以JSON形式提交
+ * @param map[string]string params 表单数据，以FormData形式提交
  */
-func PostJsonData(url string, params map[string]interface{}, headers map[string]string) ([]byte, error) {
-	var bodyJson []byte
+func PostForm(url string, params map[string]string, headers map[string]string) ([]byte, error) {
+	var data = pkgurl.Values{}
 	if params != nil {
-		var err error
-		b, err := json.Marshal(params)
-		if err != nil {
-			return nil, err
+		for key, val := range params {
+			data.Set(key, val)
 		}
-		bodyJson = b
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyJson))
+	req, err := http.NewRequest("POST", url, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	if headers != nil {
 		for key, val := range headers {
@@ -214,7 +213,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 
 	var (
 		size          int64 = 0
-		contentLength int64 = hresp.ContentLength
+		contentLength = hresp.ContentLength
 	)
 
 	if filer.IsFile(target) {
@@ -231,6 +230,14 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 					return nil, err
 				}
 			}
+		}
+	}
+
+	if contentLength == 0 {
+		if retry > 0 {
+			return Download(uri, target, retry-1, timeout, progressbar)
+		} else {
+			return nil, fmt.Errorf("The remote resource pointed to by the URL is invalid")
 		}
 	}
 
