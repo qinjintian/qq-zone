@@ -195,6 +195,10 @@ Start:
 			q.initResult() // 初始化结果
 		Retry:
 			err := q.readyDownload(qq, fqq, cookie, gtk, exclude)
+
+			// 删除本次访问好友空间痕迹
+			q.delVisitRecord(gtk, cookie, qq, fqq)
+
 			if err != nil {
 				fmt.Println(err)
 				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个账号", "⒉ 重试该账号", "⒊ 结束退出"}
@@ -574,6 +578,10 @@ Start:
 
 			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine0", gtk, hostUin, qq)
 			body, err := qzone.GetAlbumList(url, header)
+
+			// 删除本次访问好友空间痕迹
+			q.delVisitRecord(gtk, cookie, qq, hostUin)
+
 			if err != nil {
 				return
 			}
@@ -619,6 +627,50 @@ func (q *QzoneController) heartbeat(url string, header map[string]string) {
 		t.Format("2006/01/02 15:04:05")
 		myhttp.Get(url, header)
 	}
+}
+
+// 删除本次访问好友空间痕迹
+func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
+	url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/tfriend/friendshow_hide_visitor_onelogin?&g_tk=%v", gtk)
+
+	header := make(map[string]string)
+	header["cookie"] = cookie
+	header["user-agent"] = USER_AGENT
+
+	params := make(map[string]string)
+	params["vuin"] = vuin
+	params["huin"] = huin
+	params["type"] = "1"
+	params["src"] = "0"
+	params["entrance"] = "4"
+	params["qzreferrer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", vuin)
+
+	b, err := myhttp.PostFormData(url, params, header)
+	if err != nil {
+		return err
+	}
+	str := string(b)
+	beginSign := "callback("
+	if !strings.Contains(str, beginSign) {
+		return fmt.Errorf("Failed to delete access record")
+	}
+
+	beginSignIndex := strings.LastIndex(str, beginSign)
+	if beginSignIndex == -1 {
+		return fmt.Errorf("Failed to delete access record")
+	}
+
+	endSign := ");"
+	endSignIndex := strings.LastIndex(str, endSign)
+	json := str[beginSignIndex+len(beginSign):endSignIndex]
+	if !gjson.Valid(json) {
+		return fmt.Errorf("invalid json")
+	}
+
+	if gjson.Get(json, "ret").Int() != 0 {
+		return fmt.Errorf("Failed to delete access record")
+	}
+	return nil
 }
 
 // 菜单选项

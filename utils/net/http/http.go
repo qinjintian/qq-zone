@@ -3,11 +3,14 @@ package http
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	pbar "github.com/cheggaaa/pb/v3"
 	"io"
+	"io/ioutil"
 	"mime"
 	"net/http"
+	pkgurl "net/url"
 	"os"
 	"path/filepath"
 	"qq-zone/utils/filer"
@@ -15,19 +18,21 @@ import (
 	"time"
 )
 
-func Get(url string, msgs ...map[string]string) ([]byte, error) {
+/**
+ * GET请求
+ * @param string url
+ * @param map[string]string headers
+ */
+func Get(url string, headers map[string]string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	headers := make(map[string]string)
-	if len(msgs) > 0 {
-		headers = msgs[0]
-	}
-
-	for key, val := range headers {
-		req.Header.Set(key, val)
+	if headers != nil {
+		for key, val := range headers {
+			req.Header.Add(key, val)
+		}
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -52,6 +57,92 @@ func Get(url string, msgs ...map[string]string) ([]byte, error) {
 		}
 	}
 	return result.Bytes(), nil
+}
+
+/**
+ * 表单POST请求
+ * @param string url 接口地址
+ * @param map[string]string params 表单数据，以FormData形式提交
+ */
+func PostFormData(url string, params map[string]string, headers map[string]string) ([]byte, error) {
+	var data = pkgurl.Values{}
+	if params != nil {
+		for key, val := range params {
+			data.Set(key, val)
+		}
+	}
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, err
+	}
+
+	if headers != nil {
+		for key, val := range headers {
+			req.Header.Add(key, val)
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+/**
+ * 表单POST请求
+ * @param string url 接口地址
+ * @param map[string]string params 表单数据，以JSON形式提交
+ */
+func PostJsonData(url string, params map[string]interface{}, headers map[string]string) ([]byte, error) {
+	var bodyJson []byte
+	if params != nil {
+		var err error
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, err
+		}
+		bodyJson = b
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(bodyJson))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if headers != nil {
+		for key, val := range headers {
+			req.Header.Add(key, val)
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 /**
