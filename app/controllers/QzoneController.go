@@ -258,6 +258,8 @@ Start:
 			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
 		}
 	}
+
+	q.ticker.Stop()
 }
 
 func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclude bool) error {
@@ -343,9 +345,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		}
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
-
 	waiterOut.Wait()
-	q.ticker.Stop()
 	return nil
 }
 
@@ -645,16 +645,12 @@ func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
 	params["entrance"] = "4"
 	params["qzreferrer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", vuin)
 
-	b, err := myhttp.PostFormData(url, params, header)
+	b, err := myhttp.PostForm(url, params, header)
 	if err != nil {
 		return err
 	}
 	str := string(b)
 	beginSign := "callback("
-	if !strings.Contains(str, beginSign) {
-		return fmt.Errorf("Failed to delete access record")
-	}
-
 	beginSignIndex := strings.LastIndex(str, beginSign)
 	if beginSignIndex == -1 {
 		return fmt.Errorf("Failed to delete access record")
