@@ -188,17 +188,14 @@ Start:
 
 	time.Sleep(time.Second * 2)
 
-	// 为空时自动爬取开放qq相册权限的好友
 	if option == 2 {
 	OuterLoop:
 		for _, fqq := range friendQQ {
 			q.initResult() // 初始化结果
 		Retry:
 			err := q.readyDownload(qq, fqq, cookie, gtk, exclude)
-
 			// 删除本次访问好友空间痕迹
 			q.delVisitRecord(gtk, cookie, qq, fqq)
-
 			if err != nil {
 				fmt.Println(err)
 				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个账号", "⒉ 重试该账号", "⒊ 结束退出"}
@@ -259,6 +256,7 @@ Start:
 		}
 	}
 
+	close(chans)
 	q.ticker.Stop()
 }
 
