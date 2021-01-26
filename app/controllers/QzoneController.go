@@ -317,7 +317,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 			goto RetryCreateDir
 		}
 
-		photos, err := qzone.GetPhotoList(hostUin, uin, cookie, gtk, album)
+		photos, err := qzone.GetPhotoList(hostUin, uin, &cookie, gtk, album)
 		if err != nil {
 			return err
 		}
@@ -475,7 +475,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	}
 
 	target := fmt.Sprintf("%s/%s", apath, filename)
-	resp, err := myhttp.Download(source, target, 5, 600, false)
+	resp, err := myhttp.Download(source, target, header, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
 		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", hostUin, album.Get("name").String(), (key + 1), cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))

@@ -1,6 +1,7 @@
 package qzone
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -308,10 +309,11 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 }
 
 // 获取相片列表数据
-func GetPhotoList(hostUin, uin, cookie, gtk string, album gjson.Result) ([]gjson.Result, error) {
-	header := make(map[string]string)
-	header["cookie"] = cookie
-	header["user-agent"] = USER_AGENT
+func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.Result) ([]gjson.Result, error) {
+	headers := make(map[string]string)
+	headers["cookie"] = *cookie
+	headers["user-agent"] = USER_AGENT
+
 	var (
 		pageNum      int64 = 500
 		pageStart    int64 = 0
@@ -323,10 +325,57 @@ func GetPhotoList(hostUin, uin, cookie, gtk string, album gjson.Result) ([]gjson
 	photos := make([]gjson.Result, 0)
 	for {
 		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, hostUin, album.Get("id").String(), uin, pageStart, pageNum)
-		b, err := myhttp.Get(url, header)
+		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error())
 		}
+
+		if headers != nil {
+			for key, val := range headers {
+				req.Header.Add(key, val)
+			}
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return nil, err
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误，HTTP请求码是：%s", album.Get("name").String(), photoPageNum, err.Error(), resp.Status)
+		}
+
+		var (
+			qqPhotoKey string
+			setCookie = resp.Header.Get("set-cookie")
+		)
+
+		if strings.Contains(setCookie, "qq_photo_key") {
+			qqPhotoKey = setCookie[len("qq_photo_key="):strings.Index(setCookie, ";")]
+		}
+
+		// 获取qq_photo_key拼接到cookie
+		if qqPhotoKey != "" && !strings.Contains(*cookie, "qq_photo_key") {
+			*cookie += fmt.Sprintf("; qq_photo_key=%s", qqPhotoKey)
+		}
+
+		var buffer [512]byte
+		result := bytes.NewBuffer(nil)
+		for {
+			n, err := resp.Body.Read(buffer[0:])
+			result.Write(buffer[0:n])
+			if err != nil && err == io.EOF {
+				break
+			} else if err != nil {
+				resp.Body.Close()
+				return nil, err
+			}
+		}
+		resp.Body.Close()
 
 		u, err := pkgurl.Parse(url)
 		if err != nil {
@@ -334,7 +383,7 @@ func GetPhotoList(hostUin, uin, cookie, gtk string, album gjson.Result) ([]gjson
 		}
 
 		callbackFunName := u.Query().Get("callbackFun") + "_Callback"
-		str := string(b)
+		str := result.String()
 		str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
 		if !gjson.Valid(str) {
 			return nil, fmt.Errorf("invalid json")
