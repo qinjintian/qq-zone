@@ -23,7 +23,48 @@ import (
  * @param string url
  * @param map[string]string headers
  */
-func Get(url string, headers map[string]string) ([]byte, error) {
+func Get(url string, headers map[string]string) (http.Header, []byte, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if headers != nil {
+		for key, val := range headers {
+			req.Header.Add(key, val)
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
+	}
+
+	var buffer [512]byte
+	result := bytes.NewBuffer(nil)
+	for {
+		n, err := resp.Body.Read(buffer[0:])
+		result.Write(buffer[0:n])
+		if err != nil && err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, nil, err
+		}
+	}
+	return resp.Header, result.Bytes(), nil
+}
+
+/**
+ * GET请求，获取响应头
+ * @param string url
+ * @param map[string]string headers
+ */
+func Head(url string, headers map[string]string) (http.Header, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -44,19 +85,7 @@ func Get(url string, headers map[string]string) ([]byte, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
 	}
-
-	var buffer [512]byte
-	result := bytes.NewBuffer(nil)
-	for {
-		n, err := resp.Body.Read(buffer[0:])
-		result.Write(buffer[0:n])
-		if err != nil && err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, err
-		}
-	}
-	return result.Bytes(), nil
+	return resp.Header, nil
 }
 
 /**
