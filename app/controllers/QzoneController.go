@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/tidwall/gjson"
-	"net/http"
 	"os"
 	"path/filepath"
 	"qq-zone/utils/filer"
@@ -385,7 +384,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	if photo.Get("is_video").Bool() {
 		cate = "视频"
 		url := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, uin, hostUin)
-		b, err := myhttp.Get(url, header)
+		_, b, err := myhttp.Get(url, header)
 		if err != nil {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, err.Error()))
 			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, err.Error()))
@@ -440,15 +439,14 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 
 		if p, ok := q.localFiles[tmpName]; ok {
 			// 假如本地已经存在改文件名，那就匹配文件大小是否一致
-			fileInfo, _ := os.Stat(p)
-			fsize := fileInfo.Size()
-			respHeader, err := http.Get(source)
+			head, err := myhttp.Head(source, header)
 			if err != nil {
 				os.RemoveAll(q.localFiles[tmpName])
 			}
-			respHeader.Body.Close()
-
-			if respHeader.ContentLength != fsize {
+			fs, _ := strconv.ParseInt(head.Get("content-length"), 10, 64)
+			fileInfo, _ := os.Stat(p)
+			fsize := fileInfo.Size()
+			if fs == 0 || fs != fsize {
 				os.RemoveAll(q.localFiles[tmpName])
 			} else {
 				mutex.Lock()
@@ -627,7 +625,7 @@ func (q *QzoneController) heartbeat(url string, header map[string]string) {
 	q.ticker = time.NewTicker(time.Minute * 10)
 	for t := range q.ticker.C {
 		t.Format("2006/01/02 15:04:05")
-		myhttp.Get(url, header)
+		myhttp.Head(url, header)
 	}
 }
 

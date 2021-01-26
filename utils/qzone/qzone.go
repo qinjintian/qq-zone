@@ -1,7 +1,6 @@
 package qzone
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +30,7 @@ func Login() (map[string]string, error) {
 
 	res := make(map[string]string)
 	res["nickname"] = r["nickname"]
-	credential, err := getCredential(r["redirect"])
+	credential, err := credential(r["redirect"])
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +107,7 @@ func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 	header["user-agent"] = USER_AGENT
 	header["cookie"] = fmt.Sprintf("qrsig=%s;", qrsig)
 	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", pkgurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
-	b, err := myhttp.Get(url, header)
+	_, b, err := myhttp.Get(url, header)
 	if err != nil {
 		return "", errors.New(err.Error())
 	}
@@ -192,7 +191,7 @@ func action() string {
 }
 
 // 登录成功，验证进入空间的签名
-func getCredential(url string) (map[string]string, error) {
+func credential(url string) (map[string]string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -252,7 +251,7 @@ func GetAlbumListUrl(hostUin string, uin string, g_tk string) string {
 
 // 获取相册列表数据
 func GetAlbumList(url string, header map[string]string) (string, error) {
-	b, err := myhttp.Get(url, header)
+	_, b, err := myhttp.Get(url, header)
 	if err != nil {
 		return "", fmt.Errorf("（。・＿・。）ﾉ获取相册列表出错：%s", err.Error())
 	}
@@ -284,16 +283,16 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 		albumList = result.Get("data.albumListModeSort").String()
 	case 3:
 		// 展示设置 - 分类视图
-		albumResult := make([]interface{}, 0)
+		r := make([]interface{}, 0)
 		albumListModeClass := result.Get("data.albumListModeClass").Array()
 		for _, items := range albumListModeClass {
 			albumListArrs := items.Get("albumList").Array()
 			for _, album := range albumListArrs {
-				albumResult = append(albumResult, album.Value())
+				r = append(r, album.Value())
 			}
 		}
 
-		b , err := json.Marshal(albumResult)
+		b , err := json.Marshal(r)
 		if err != nil {
 			return "", err
 		}
@@ -325,33 +324,14 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 	photos := make([]gjson.Result, 0)
 	for {
 		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, hostUin, album.Get("id").String(), uin, pageStart, pageNum)
-		req, err := http.NewRequest("GET", url, nil)
+		header, body, err := myhttp.Get(url, headers)
 		if err != nil {
 			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error())
 		}
 
-		if headers != nil {
-			for key, val := range headers {
-				req.Header.Add(key, val)
-			}
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			if resp != nil {
-				resp.Body.Close()
-			}
-			return nil, err
-		}
-
-		if resp.StatusCode != 200 {
-			resp.Body.Close()
-			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误，HTTP请求码是：%s", album.Get("name").String(), photoPageNum, err.Error(), resp.Status)
-		}
-
 		var (
 			qqPhotoKey string
-			setCookie = resp.Header.Get("set-cookie")
+			setCookie = header.Get("set-cookie")
 		)
 
 		if strings.Contains(setCookie, "qq_photo_key") {
@@ -363,27 +343,13 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 			*cookie += fmt.Sprintf("; qq_photo_key=%s", qqPhotoKey)
 		}
 
-		var buffer [512]byte
-		result := bytes.NewBuffer(nil)
-		for {
-			n, err := resp.Body.Read(buffer[0:])
-			result.Write(buffer[0:n])
-			if err != nil && err == io.EOF {
-				break
-			} else if err != nil {
-				resp.Body.Close()
-				return nil, err
-			}
-		}
-		resp.Body.Close()
-
 		u, err := pkgurl.Parse(url)
 		if err != nil {
 			return nil, err
 		}
 
 		callbackFunName := u.Query().Get("callbackFun") + "_Callback"
-		str := result.String()
+		str := string(body)
 		str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
 		if !gjson.Valid(str) {
 			return nil, fmt.Errorf("invalid json")
@@ -408,7 +374,7 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 
 // 获取我的QQ好友
 func GetMyFriends(url string, header map[string]string) (string, error) {
-	b, err := myhttp.Get(url, header)
+	_, b, err := myhttp.Get(url, header)
 	if err != nil {
 		return "", fmt.Errorf("（。・＿・。）ﾉ获取好友列表出错：%s", err.Error())
 	}
