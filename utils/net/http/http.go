@@ -147,10 +147,11 @@ func PostForm(url string, params map[string]string, headers map[string]string) (
 /**
 * 远程文件下载，支持断点续传，支持实时进度显示
 * @param string uri 远程资源地址
+* @param map[string]string headers 远程资源地址
 * @param string target 调用时传入文件名，如果支持断点续传时当程序超时程序会自动调用该方法重新下载，此时传入的是文件句柄
 * @param interface{} msgs 可变参数，参数顺序 0: retry int（下载失败后重试次数） 1：timeout int 超时，默认300s 2：progressbar bool 是否开启进度条，默认false
  */
-func Download(uri string, target string, msgs ...interface{}) (map[string]interface{}, error) {
+func Download(uri string, target string, headers map[string]string, msgs ...interface{}) (map[string]interface{}, error) {
 	filename := filepath.Base(target)
 	entension := filepath.Ext(target)
 	var targetDir string
@@ -184,15 +185,46 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		progressbar = msgs[2].(bool)
 	}
 
-	hresp, err := http.Get(uri)
+	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
+		} else {
+			return nil, err
+		}
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36")
+	if headers != nil {
+		for key, val := range headers {
+			req.Header.Add(key, val)
+		}
+	}
+
+	client := &http.Client{
+		Timeout: time.Second * time.Duration(timeout),
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	hresp, err := client.Do(req)
+	if err != nil {
+		if retry > 0 {
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
 		} else {
 			return nil, fmt.Errorf("Failed to get response header, Error message → ", err.Error())
 		}
 	}
-	hresp.Body.Close()
+	defer hresp.Body.Close()
+
+	if hresp.StatusCode < 200 || hresp.StatusCode >= 300 {
+		if retry > 0 {
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
+		} else {
+			return nil, fmt.Errorf("Http request was not successfully received and processed, status code is %v, status is %v", hresp.StatusCode, hresp.Status)
+		}
+	}
 
 	contentRange := hresp.Header.Get("Content-Range")
 	acceptRanges := hresp.Header.Get("Accept-Ranges")
@@ -225,7 +257,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		} else {
 			if err := os.Remove(target); err != nil {
 				if retry > 0 {
-					return Download(uri, target, retry-1, timeout, progressbar)
+					return Download(uri, target, headers, retry-1, timeout, progressbar)
 				} else {
 					return nil, err
 				}
@@ -235,7 +267,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 
 	if contentLength == 0 {
 		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
 		} else {
 			return nil, fmt.Errorf("The remote resource pointed to by the URL is invalid")
 		}
@@ -249,32 +281,15 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		return res, nil
 	}
 
-	req, err := http.NewRequest("GET", uri, nil)
-	if err != nil {
-		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
-		} else {
-			return nil, err
-		}
-	}
-
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36")
 	if ranges {
 		req.Header.Set("Accept-Ranges", "bytes")
 		req.Header.Set("Range", fmt.Sprintf("bytes=%v-", size))
 	}
 
-	client := &http.Client{
-		Timeout: time.Second * time.Duration(timeout),
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
 		} else {
 			return nil, err
 		}
@@ -283,7 +298,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
 		} else {
 			return nil, fmt.Errorf("Http request was not successfully received and processed, status code is %v, status is %v", resp.StatusCode, resp.Status)
 		}
@@ -292,7 +307,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 	file, err := os.OpenFile(target, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 	if err != nil {
 		if retry > 0 {
-			return Download(uri, target, retry-1, timeout, progressbar)
+			return Download(uri, target, headers, retry-1, timeout, progressbar)
 		} else {
 			return nil, err
 		}
@@ -307,7 +322,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		bar.Finish()
 		if err != nil {
 			if retry > 0 {
-				return Download(uri, target, retry-1, timeout, progressbar)
+				return Download(uri, target, headers, retry-1, timeout, progressbar)
 			} else {
 				return nil, err
 			}
@@ -316,7 +331,7 @@ func Download(uri string, target string, msgs ...interface{}) (map[string]interf
 		_, err = io.Copy(file, resp.Body)
 		if err != nil {
 			if retry > 0 {
-				return Download(uri, target, retry-1, timeout, progressbar)
+				return Download(uri, target, headers, retry-1, timeout, progressbar)
 			} else {
 				return nil, err
 			}
