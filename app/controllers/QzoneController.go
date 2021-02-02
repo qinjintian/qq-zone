@@ -26,8 +26,8 @@ type QzoneController struct {
 }
 
 var (
-	chans               chan int       // 缓冲信道控制并行下载的任务数
 	mutex               sync.Mutex     // 互斥锁，下载数累加解决竞态
+	chans               chan struct{}  // 缓冲信道控制并行下载的任务数
 	waiterIn            sync.WaitGroup // 等待当前相册下载完才能继续下一个相册
 	waiterOut           sync.WaitGroup // 等待所有相片下载完才能继续往下执行
 	total               uint64 = 0     // 相片/视频总数
@@ -36,15 +36,15 @@ var (
 	repeatTotal         uint64 = 0     // 重复数
 	videoTotal          uint64 = 0     // 视频数
 	imageTotal          uint64 = 0     // 相片数
-	albumPhotoSuccTotal uint64 = 0     // 正在下载的相册相片成功数
+	albumPhotoSuccTotal uint64 = 0     // 当前相册相片成功数
 )
 
 const (
-	QRCODE = "qrcode.png"
+	QRCODE     = "qrcode.png"
 	USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
 )
 
-func  (q *QzoneController) initResult() {
+func (q *QzoneController) initResult() {
 	total, addTotal, succTotal, repeatTotal, videoTotal, imageTotal, albumPhotoSuccTotal = 0, 0, 0, 0, 0, 0, 0
 }
 
@@ -112,7 +112,7 @@ Start:
 			for key, fqq := range friendQQ {
 				_, err := strconv.ParseInt(fqq, 10, 64)
 				if err != nil {
-					fmt.Println(fmt.Sprintf("您的好友QQ号的第%d个账号不正确，请重新输入~", (key+1)))
+					fmt.Println(fmt.Sprintf("您的好友QQ号的第%d个账号不正确，请重新输入~", (key + 1)))
 					continue friendOuterLoop
 				}
 			}
@@ -156,7 +156,7 @@ Start:
 	fmt.Printf("请输入要下载的相册名，多个相册用空格键隔开，格式[相册1 相册2]，不输入默认下载全部相册：")
 	scanner.Scan()
 	str := scanner.Text()
-	var albums = []string{}
+	var albums []string
 	if str != "" {
 		albums = strings.Split(str, " ")
 	}
@@ -180,13 +180,13 @@ Start:
 
 	gtk := res["g_tk"]
 	cookie := res["cookie"]
-	chans = make(chan int, task)
+	chans = make(chan struct{}, task)
 
 	fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("登录成功，^_^欢迎%s，%s", res["nickname"], "程序即将开始下载~~~~"))
 	fmt.Println()
 
 	time.Sleep(time.Second * 2)
-
+	/**/
 	if option == 2 {
 	OuterLoop:
 		for index, fqq := range friendQQ {
@@ -234,11 +234,11 @@ Start:
 				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
 			}
 
-			if index < (len(friendQQ)-1) {
+			if index < (len(friendQQ) - 1) {
 				fmt.Println()
 			}
 
-			// 睡眠N秒再进行下一个账号
+			// 睡眠 N 秒再进行下一个账号
 			time.Sleep(time.Second * 3)
 		}
 	} else {
@@ -269,7 +269,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 	header["user-agent"] = USER_AGENT
 
 	var (
-		uin = qq
+		uin     = qq
 		hostUin = friendQQ
 	)
 
@@ -341,7 +341,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		for key, photo := range photos {
 			waiterIn.Add(1)
 			waiterOut.Add(1)
-			chans <- 1
+			chans <- struct{}{}
 			go q.StartDownload(hostUin, uin, gtk, cookie, key, photo, album, apath, photoTotal, exclude)
 		}
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
@@ -386,22 +386,22 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		url := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, uin, hostUin)
 		_, b, err := myhttp.Get(url, header)
 		if err != nil {
-			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, err.Error()))
-			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, err.Error()))
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, err.Error()))
+			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, err.Error()))
 			return
 		}
 		str := string(b)
 		str = str[16:strings.LastIndex(str, ")")]
 		if !gjson.Valid(str) {
-			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：invalid json", hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url))
-			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：invalid json", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url))
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：invalid json", hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
+			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：invalid json", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
 			return
 		}
 		data := gjson.Parse(str).Get("data")
 		videos := data.Get("photos").Array()
 		if len(videos) < 1 {
-			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url))
-			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url))
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
+			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
 			return
 		}
 		picPosInPage := data.Get("picPosInPage").Int()
@@ -409,8 +409,8 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		status := videoInfo["status"].Int()
 		// 状态为2的表示可以正常播放的视频，也就是已经转换并上传在QQ空间服务器上
 		if status != 2 {
-			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, photo.Get("name").String()))
-			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), photo.Get("name").String(), url, photo.Get("url").String()))
+			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, photo.Get("name").String()))
+			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, photo.Get("url").String()))
 			return
 		}
 		source = videoInfo["video_url"].String()
@@ -458,7 +458,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 				succTotal++
 				albumPhotoSuccTotal++
 				repeatTotal++
-				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), (key + 1), cate) + "\n" +
+				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
 					"当前/账号信息：" + hostUin + "\n" +
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
@@ -476,8 +476,8 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	resp, err := myhttp.Download(source, target, header, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", hostUin, album.Get("name").String(), (key + 1), cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
-		logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), (key + 1), cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
+		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", hostUin, album.Get("name").String(), key+1, cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
+		logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
 		return
 	} else {
 		mutex.Lock()
@@ -491,7 +491,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), (key + 1), cate) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
 			"当前/账号信息：" + hostUin + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
@@ -631,8 +631,6 @@ func (q *QzoneController) heartbeat(url string, header map[string]string) {
 
 // 删除本次访问好友空间痕迹
 func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
-	url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/tfriend/friendshow_hide_visitor_onelogin?&g_tk=%v", gtk)
-
 	header := make(map[string]string)
 	header["cookie"] = cookie
 	header["user-agent"] = USER_AGENT
@@ -644,7 +642,7 @@ func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
 	params["src"] = "0"
 	params["entrance"] = "4"
 	params["qzreferrer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", vuin)
-
+	url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/tfriend/friendshow_hide_visitor_onelogin?&g_tk=%v", gtk)
 	b, err := myhttp.PostForm(url, params, header)
 	if err != nil {
 		return err
@@ -658,7 +656,7 @@ func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
 
 	endSign := ");"
 	endSignIndex := strings.LastIndex(str, endSign)
-	json := str[beginSignIndex+len(beginSign):endSignIndex]
+	json := str[beginSignIndex+len(beginSign) : endSignIndex]
 	if !gjson.Valid(json) {
 		return fmt.Errorf("invalid json")
 	}
