@@ -26,26 +26,26 @@ type QzoneController struct {
 }
 
 var (
-	mutex               sync.Mutex     // 互斥锁，下载数累加解决竞态
-	chans               chan struct{}  // 缓冲信道控制并行下载的任务数
-	waiterIn            sync.WaitGroup // 等待当前相册下载完才能继续下一个相册
-	waiterOut           sync.WaitGroup // 等待所有相片下载完才能继续往下执行
-	total               uint64 = 0     // 相片/视频总数
-	addTotal            uint64 = 0     // 新增数
-	succTotal           uint64 = 0     // 下载成功数
-	repeatTotal         uint64 = 0     // 重复数
-	videoTotal          uint64 = 0     // 视频数
-	imageTotal          uint64 = 0     // 相片数
-	albumPhotoSuccTotal uint64 = 0     // 当前相册相片成功数
+	mutex       sync.Mutex     // 互斥锁，下载数累加解决竞态
+	chans       chan struct{}  // 缓冲信道控制并行下载的任务数
+	waiterIn    sync.WaitGroup // 等待当前相册下载完才能继续下一个相册
+	waiterOut   sync.WaitGroup // 等待所有相片下载完才能继续往下执行
+	total       uint64 = 0     // 总数
+	addTotal    uint64 = 0     // 新增数
+	succTotal   uint64 = 0     // 成功数
+	videoTotal  uint64 = 0     // 视频数
+	imageTotal  uint64 = 0     // 相片数
+	repeatTotal uint64 = 0     // 重复数
+	sequence    uint64 = 0     // 正在下载的相册相片的索引位置
 )
 
 const (
-	QRCODE     = "qrcode.png"
-	USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
+	QRCODE_SAVE_PATH = "qrcode.png"
+	USER_AGENT       = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36"
 )
 
 func (q *QzoneController) initResult() {
-	total, addTotal, succTotal, repeatTotal, videoTotal, imageTotal, albumPhotoSuccTotal = 0, 0, 0, 0, 0, 0, 0
+	total, addTotal, succTotal, repeatTotal, videoTotal, imageTotal, sequence = 0, 0, 0, 0, 0, 0, 0
 }
 
 func Spider() {
@@ -174,8 +174,8 @@ Start:
 	}
 
 	// 登陆成功之后删掉二维码
-	if filer.IsFile(QRCODE) {
-		os.Remove(QRCODE)
+	if filer.IsFile(QRCODE_SAVE_PATH) {
+		os.Remove(QRCODE_SAVE_PATH)
 	}
 
 	gtk := res["g_tk"]
@@ -336,7 +336,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 			os.MkdirAll(apath, os.ModePerm)
 		}
 
-		albumPhotoSuccTotal = 0 // 重新初始化为0
+		sequence = 0 // 重新初始化为0
 		// 正在下载处理
 		for key, photo := range photos {
 			waiterIn.Add(1)
@@ -456,9 +456,9 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 					imageTotal++
 				}
 				succTotal++
-				albumPhotoSuccTotal++
+				sequence++
 				repeatTotal++
-				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
+				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", sequence, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
 					"当前/账号信息：" + hostUin + "\n" +
 					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 					"相片/视频原名：" + photo.Get("name").String() + "\n" +
@@ -482,7 +482,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	} else {
 		mutex.Lock()
 		succTotal++
-		albumPhotoSuccTotal++
+		sequence++
 		addTotal++
 		if photo.Get("is_video").Bool() {
 			videoTotal++
@@ -491,7 +491,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		}
 
 		fileInfo, _ := os.Stat(resp["path"].(string))
-		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", albumPhotoSuccTotal, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
+		output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成", sequence, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
 			"当前/账号信息：" + hostUin + "\n" +
 			"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
 			"相片/视频原名：" + photo.Get("name").String() + "\n" +
@@ -532,8 +532,8 @@ Start:
 	time.Sleep(time.Second * 2)
 
 	// 登陆成功之后删掉二维码
-	if filer.IsFile(QRCODE) {
-		os.Remove(QRCODE)
+	if filer.IsFile(QRCODE_SAVE_PATH) {
+		os.Remove(QRCODE_SAVE_PATH)
 	}
 
 	gtk := res["g_tk"]
