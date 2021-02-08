@@ -362,7 +362,11 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 		data := res.Get("data")
 		list := data.Get("photoList").Array()
 		photos = append(photos, list...)
-		photoTotal += data.Get("totalInPage").Int()
+		if data.Get("totalInPage").Exists() {
+			photoTotal += data.Get("totalInPage").Int()
+		} else {
+			photoTotal += int64(len(list))
+		}
 		if totalInAlbum == photoTotal { // 说明这个相册下载完成了
 			break
 		}
