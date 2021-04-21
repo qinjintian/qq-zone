@@ -82,7 +82,7 @@ func Head(url string, headers map[string]string) (http.Header, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300  {
 		return nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
 	}
 	return resp.Header, nil
