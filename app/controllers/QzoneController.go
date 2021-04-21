@@ -459,7 +459,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		}
 
 		if p, ok := q.localFiles[tmpName]; ok {
-			// 假如本地已经存在改文件名，那就匹配文件大小是否一致
+			// 假如本地已经存在这个文件名，那就匹配文件大小是否一致
 			head, err := myhttp.Head(source, header)
 			if err != nil {
 				os.RemoveAll(q.localFiles[tmpName])
