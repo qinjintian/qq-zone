@@ -195,7 +195,7 @@ func Download(uri string, target string, headers map[string]string, msgs ...inte
 		targetDir = target[:lasti]
 	}
 
-	if (!filer.IsDir(targetDir)) {
+	if !filer.IsDir(targetDir) {
 		os.MkdirAll(targetDir, os.ModePerm)
 	}
 
