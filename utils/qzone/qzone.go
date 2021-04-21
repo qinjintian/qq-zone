@@ -362,7 +362,11 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 		data := res.Get("data")
 		list := data.Get("photoList").Array()
 		photos = append(photos, list...)
-		photoTotal += data.Get("totalInPage").Int()
+		if data.Get("totalInPage").Exists() {
+			photoTotal += data.Get("totalInPage").Int()
+		} else {
+			photoTotal += int64(len(list))
+		}
 		if totalInAlbum == photoTotal { // 说明这个相册下载完成了
 			break
 		}
@@ -397,5 +401,31 @@ func GetMyFriends(url string, header map[string]string) (string, error) {
 	}
 	friends := gjson.Get(str, "data.items_list")
 	return friends.String(), nil
+}
+
+// 删除相片/视频的 codelist 参数
+func GetCodeMulDelList(photo gjson.Result) string {
+	lloc := photo.Get("lloc").String()
+	picrefer := photo.Get("picrefer").String()
+	utstr := ""
+	if photo.Get("uploadtime").Exists() {
+		utstr = photo.Get("uploadtime").String()
+	} else {
+		utstr = photo.Get("uploadTime").String()
+	}
+	ut, _ := time.Parse("2006-01-02 15:04:05", utstr)
+	uploadtime := ut.Unix()
+	forum := photo.Get("forum").String()
+	shorturl := ""
+	if photo.Get("shorturl").Exists() {
+		shorturl = strings.Replace(photo.Get("shorturl").String(), " ", "", -1)
+	}
+	sloc := photo.Get("sloc").String()
+	phototype := photo.Get("phototype").String()
+	origin := 0
+	if photo.Get("origin").Exists() {
+		origin =  1
+	}
+	return fmt.Sprintf("%v|%v|%v|%v|%v|%v|%v|%v", lloc, picrefer, uploadtime, forum, shorturl, sloc, phototype, origin)
 }
 

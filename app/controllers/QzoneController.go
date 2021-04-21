@@ -10,6 +10,7 @@ import (
 	"qq-zone/utils/helper"
 	"qq-zone/utils/logger"
 	myhttp "qq-zone/utils/net/http"
+	pgkurl "net/url"
 	"qq-zone/utils/qzone"
 	"reflect"
 	"strconv"
@@ -226,12 +227,12 @@ Start:
 
 			if exclude {
 				if repeatTotal > 0 {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
 				} else {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
 				}
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal))
 			}
 
 			if index < (len(friendQQ) - 1) {
@@ -242,6 +243,7 @@ Start:
 			time.Sleep(time.Second * 3)
 		}
 	} else {
+		q.initResult() // 初始化结果
 		err := q.readyDownload(qq, "", cookie, gtk, exclude)
 		if err != nil {
 			fmt.Println(err)
@@ -250,12 +252,12 @@ Start:
 
 		if exclude {
 			if repeatTotal > 0 {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal), repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
 			}
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, (total - succTotal)))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal))
 		}
 	}
 
@@ -405,7 +407,8 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			return
 		}
 		picPosInPage := data.Get("picPosInPage").Int()
-		videoInfo := (videos[picPosInPage]).Get("video_info").Map()
+		video := videos[picPosInPage]
+		videoInfo := video.Get("video_info").Map()
 		status := videoInfo["status"].Int()
 		// 状态为2的表示可以正常播放的视频，也就是已经转换并上传在QQ空间服务器上
 		if status != 2 {
@@ -413,7 +416,25 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d个视频文件无效，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, photo.Get("url").String()))
 			return
 		}
+
 		source = videoInfo["video_url"].String()
+
+		if video.Get("phototype").Int() == 17 {
+			header["Accept"] = "*/*"
+			header["Accept-Encoding"] = "identity;q=1, *;q=0"
+			header["Connection"] = "keep-alive"
+			header["Host"] = ""
+			u, err := pgkurl.Parse(source)
+			if err == nil {
+				header["Host"] = u.Host
+			}
+			header["Range"] = "bytes=0-"
+			header["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", hostUin)
+			header["Sec-Fetch-Dest"] = "video"
+			header["Sec-Fetch-Mode"] = "no-cors"
+			header["Sec-Fetch-Site"] = "cross-site"
+		}
+
 		// 目前QQ空间所有视频都是MP4格式，所以暂时固定后缀名都是.mp4
 		filename = fmt.Sprintf("VID_%s_%s_%s.mp4", shootdate[:8], shootdate[8:], helper.Md5(sloc)[8:24])
 	} else {
@@ -442,32 +463,33 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			head, err := myhttp.Head(source, header)
 			if err != nil {
 				os.RemoveAll(q.localFiles[tmpName])
-			}
-			fs, _ := strconv.ParseInt(head.Get("content-length"), 10, 64)
-			fileInfo, _ := os.Stat(p)
-			fsize := fileInfo.Size()
-			if fs == 0 || fs != fsize {
-				os.RemoveAll(q.localFiles[tmpName])
 			} else {
-				mutex.Lock()
-				if photo.Get("is_video").Bool() {
-					videoTotal++
+				fs, _ := strconv.ParseInt(head.Get("content-length"), 10, 64)
+				fileInfo, _ := os.Stat(p)
+				fsize := fileInfo.Size()
+				if fs == 0 || fs != fsize {
+					os.RemoveAll(q.localFiles[tmpName])
 				} else {
-					imageTotal++
+					mutex.Lock()
+					if photo.Get("is_video").Bool() {
+						videoTotal++
+					} else {
+						imageTotal++
+					}
+					succTotal++
+					sequence++
+					repeatTotal++
+					output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", sequence, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
+						"当前/账号信息：" + hostUin + "\n" +
+						"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
+						"相片/视频原名：" + photo.Get("name").String() + "\n" +
+						"相片/视频名称：" + tmpName + filepath.Ext(p) + "\n" +
+						"相片/视频大小：" + filer.FormatBytes(fsize) + "\n" +
+						"相片/视频地址：" + source + "\n"
+					fmt.Println(output)
+					mutex.Unlock()
+					return
 				}
-				succTotal++
-				sequence++
-				repeatTotal++
-				output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", sequence, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
-					"当前/账号信息：" + hostUin + "\n" +
-					"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
-					"相片/视频原名：" + photo.Get("name").String() + "\n" +
-					"相片/视频名称：" + tmpName + filepath.Ext(p) + "\n" +
-					"相片/视频大小：" + filer.FormatBytes(fsize) + "\n" +
-					"相片/视频地址：" + source + "\n"
-				fmt.Println(output)
-				mutex.Unlock()
-				return
 			}
 		}
 	}
