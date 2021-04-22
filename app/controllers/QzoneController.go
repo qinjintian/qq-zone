@@ -462,12 +462,13 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			// 假如本地已经存在这个文件名，那就匹配文件大小是否一致
 			head, err := myhttp.Head(source, header)
 			if err != nil {
-				os.RemoveAll(q.localFiles[tmpName])
+				// 如果该文件地址失效了那也不要删本地已存在的文件
+				return
 			} else {
 				fs, _ := strconv.ParseInt(head.Get("content-length"), 10, 64)
 				fileInfo, _ := os.Stat(p)
 				fsize := fileInfo.Size()
-				if fs == 0 || fs != fsize {
+				if fs > fsize {
 					os.RemoveAll(q.localFiles[tmpName])
 				} else {
 					mutex.Lock()
