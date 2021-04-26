@@ -419,21 +419,19 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 
 		source = videoInfo["video_url"].String()
 
-		if video.Get("phototype").Int() == 17 {
-			header["Accept"] = "*/*"
-			header["Accept-Encoding"] = "identity;q=1, *;q=0"
-			header["Connection"] = "keep-alive"
-			header["Host"] = ""
-			u, err := pgkurl.Parse(source)
-			if err == nil {
-				header["Host"] = u.Host
-			}
-			header["Range"] = "bytes=0-"
-			header["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", hostUin)
-			header["Sec-Fetch-Dest"] = "video"
-			header["Sec-Fetch-Mode"] = "no-cors"
-			header["Sec-Fetch-Site"] = "cross-site"
+		header["Accept"] = "*/*"
+		header["Accept-Encoding"] = "identity;q=1, *;q=0"
+		header["Connection"] = "keep-alive"
+		header["Host"] = ""
+		u, err := pgkurl.Parse(source)
+		if err == nil {
+			header["Host"] = u.Host
 		}
+		header["Range"] = "bytes=0-"
+		header["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", hostUin)
+		header["Sec-Fetch-Dest"] = "video"
+		header["Sec-Fetch-Mode"] = "no-cors"
+		header["Sec-Fetch-Site"] = "cross-site"
 
 		// 目前QQ空间所有视频都是MP4格式，所以暂时固定后缀名都是.mp4
 		filename = fmt.Sprintf("VID_%s_%s_%s.mp4", shootdate[:8], shootdate[8:], helper.Md5(sloc)[8:24])
@@ -462,12 +460,13 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			// 假如本地已经存在这个文件名，那就匹配文件大小是否一致
 			head, err := myhttp.Head(source, header)
 			if err != nil {
-				os.RemoveAll(q.localFiles[tmpName])
+				// 如果该文件地址失效了那也不要删本地已存在的文件
+				return
 			} else {
 				fs, _ := strconv.ParseInt(head.Get("content-length"), 10, 64)
 				fileInfo, _ := os.Stat(p)
 				fsize := fileInfo.Size()
-				if fs == 0 || fs != fsize {
+				if fs > fsize {
 					os.RemoveAll(q.localFiles[tmpName])
 				} else {
 					mutex.Lock()
