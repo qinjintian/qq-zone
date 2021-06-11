@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/tidwall/gjson"
+	pgkurl "net/url"
 	"os"
 	"path/filepath"
 	"qq-zone/utils/filer"
 	"qq-zone/utils/helper"
 	"qq-zone/utils/logger"
 	myhttp "qq-zone/utils/net/http"
-	pgkurl "net/url"
 	"qq-zone/utils/qzone"
 	"reflect"
 	"strconv"
@@ -310,7 +310,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		if name[len(name)-1:] == "." {
 			name = strings.ReplaceAll(name, ".", "")
 		}
-		apath := fmt.Sprintf("%v%v", baseDir, name)
+		apath := strings.Trim(baseDir + name, " ")
 	RetryCreateDir:
 		err := os.MkdirAll(apath, os.ModePerm)
 		if err != nil {
