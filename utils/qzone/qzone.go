@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	ihttp "github.com/qinjintian/qq-zone/utils/net/http"
 	"github.com/tidwall/gjson"
 	"io"
 	"math/rand"
 	"net/http"
-	pkgurl "net/url"
+	iurl "net/url"
 	"os"
-	myhttp "qq-zone/utils/net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -28,14 +28,16 @@ func Login() (map[string]string, error) {
 		return nil, err
 	}
 
-	res := make(map[string]string)
-	res["nickname"] = r["nickname"]
-	credential, err := credential(r["redirect"])
+	identity, err := credential(r["redirect"])
 	if err != nil {
 		return nil, err
 	}
-	res["g_tk"] = credential["g_tk"]
-	res["cookie"] = credential["cookie"]
+
+	res := make(map[string]string)
+	res["nickname"] = r["nickname"]
+	res["g_tk"] = identity["g_tk"]
+	res["cookie"] = identity["cookie"]
+
 	return res, nil
 }
 
@@ -71,33 +73,39 @@ OuterLoop:
 			return nil, errors.New("未知错误001，请刷新重试！")
 		}
 
-		s := strings.Split(strings.ReplaceAll(str[strings.Index(str, "(")+1:len(str)-1], "'", ""), ",")
 		// 间隔3秒循环一次
 		if isFirstLoop {
 			time.Sleep(time.Second * 3)
 		}
+
+		s := strings.Split(strings.ReplaceAll(str[strings.Index(str, "(")+1:len(str)-1], "'", ""), ",")
 		// 65 二维码已失效 66 二维码未失效 67 已扫描,但还未点击确认 0  已经点击确认,并登录成功
 		switch s[0] {
 		case "65":
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "二维码失效，已重新生成")
 			goto StartLoop
+
 		case "66":
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "二维码已生成在根目录，请双击打开[qrcode.png]并使用手机QQ扫码登录")
 			isFirstLoop = true
 			continue OuterLoop
+
 		case "67":
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), "已扫描,请点击允许登录")
 			isFirstLoop = true
 			continue OuterLoop
+
 		case "0":
 			// 已经点击确认,并登录成功
 			res["nickname"] = s[len(s)-1]
 			res["redirect"] = s[2]
 			break OuterLoop
+
 		default:
 			return nil, errors.New("未知错误002，请刷新重试！")
 		}
 	}
+
 	return res, nil
 }
 
@@ -106,11 +114,13 @@ func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 	header := make(map[string]string)
 	header["user-agent"] = USER_AGENT
 	header["cookie"] = fmt.Sprintf("qrsig=%s;", qrsig)
-	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", pkgurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
-	_, b, err := myhttp.Get(url, header)
+	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", iurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
+
+	_, b, err := ihttp.Get(url, header)
 	if err != nil {
 		return "", errors.New(err.Error())
 	}
+
 	return string(b), nil
 }
 
@@ -138,6 +148,7 @@ func getQRC() (http.Header, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	return resp.Header, nil
 }
 
@@ -170,6 +181,7 @@ func getLoginSig() (string, error) {
 	if loginSig == "" {
 		return "", errors.New("获取login_sig参数错误，请稍后重试")
 	}
+
 	return loginSig, nil
 }
 
@@ -182,6 +194,7 @@ func ptqrtoken(qrsig string) string {
 	for i := 0; i < len(qrsig); i++ {
 		e += (e << 5) + int(qrsig[i])
 	}
+
 	return strconv.Itoa(2147483647 & e)
 }
 
@@ -232,6 +245,7 @@ func credential(url string) (map[string]string, error) {
 	res := make(map[string]string)
 	res["g_tk"] = gtk(p_skey)
 	res["cookie"] = strings.Join(cookie, "; ")
+
 	return res, nil
 }
 
@@ -241,6 +255,7 @@ func gtk(skey string) string {
 	for i := 0; i < len(skey); i++ {
 		h += (h << 5) + int(skey[i])
 	}
+
 	return strconv.Itoa(h & 2147483647)
 }
 
@@ -251,12 +266,12 @@ func GetAlbumListUrl(hostUin string, uin string, g_tk string) string {
 
 // 获取相册列表数据
 func GetAlbumList(url string, header map[string]string) (string, error) {
-	_, b, err := myhttp.Get(url, header)
+	_, b, err := ihttp.Get(url, header)
 	if err != nil {
 		return "", fmt.Errorf("（。・＿・。）ﾉ获取相册列表出错：%s", err.Error())
 	}
 
-	u, err := pkgurl.Parse(url)
+	u, err := iurl.Parse(url)
 	if err != nil {
 		return "", err
 	}
@@ -278,9 +293,11 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 	switch mode {
 	case 0:
 		albumList = result.Get("data.albumList").String()
+
 	case 2:
 		// 展示设置 - 普通视图
 		albumList = result.Get("data.albumListModeSort").String()
+
 	case 3:
 		// 展示设置 - 分类视图
 		r := make([]interface{}, 0)
@@ -292,7 +309,7 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 			}
 		}
 
-		b , err := json.Marshal(r)
+		b, err := json.Marshal(r)
 		if err != nil {
 			return "", err
 		}
@@ -304,6 +321,7 @@ func GetAlbumList(url string, header map[string]string) (string, error) {
 			return "", fmt.Errorf("（。・＿・。）ﾉ 该账号没有获取到任何相册哦~~")
 		}
 	}
+
 	return albumList, nil
 }
 
@@ -324,14 +342,14 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 	photos := make([]gjson.Result, 0)
 	for {
 		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", gtk, hostUin, album.Get("id").String(), uin, pageStart, pageNum)
-		header, body, err := myhttp.Get(url, headers)
+		header, body, err := ihttp.Get(url, headers)
 		if err != nil {
 			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册图片[%s]第%d页错误:%s", album.Get("name").String(), photoPageNum, err.Error())
 		}
 
 		var (
 			qqPhotoKey string
-			setCookie = header.Get("set-cookie")
+			setCookie  = header.Get("set-cookie")
 		)
 
 		if strings.Contains(setCookie, "qq_photo_key") {
@@ -343,7 +361,7 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 			*cookie += fmt.Sprintf("; qq_photo_key=%s", qqPhotoKey)
 		}
 
-		u, err := pkgurl.Parse(url)
+		u, err := iurl.Parse(url)
 		if err != nil {
 			return nil, err
 		}
@@ -354,11 +372,13 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 		if !gjson.Valid(str) {
 			return nil, fmt.Errorf("invalid json")
 		}
+
 		res := gjson.Parse(str)
 		cade := res.Get("code").Int()
 		if cade != 0 {
 			return nil, fmt.Errorf(res.Get("message").String())
 		}
+
 		data := res.Get("data")
 		list := data.Get("photoList").Array()
 		photos = append(photos, list...)
@@ -367,23 +387,26 @@ func GetPhotoList(hostUin, uin string, cookie *string, gtk string, album gjson.R
 		} else {
 			photoTotal += int64(len(list))
 		}
+
 		if totalInAlbum == photoTotal { // 说明这个相册下载完成了
 			break
 		}
+
 		photoPageNum++
 		pageStart += 500
 	}
+
 	return photos, nil
 }
 
 // 获取我的QQ好友
 func GetMyFriends(url string, header map[string]string) (string, error) {
-	_, b, err := myhttp.Get(url, header)
+	_, b, err := ihttp.Get(url, header)
 	if err != nil {
 		return "", fmt.Errorf("（。・＿・。）ﾉ获取好友列表出错：%s", err.Error())
 	}
 
-	u, err := pkgurl.Parse(url)
+	u, err := iurl.Parse(url)
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +422,9 @@ func GetMyFriends(url string, header map[string]string) (string, error) {
 	if cade != 0 {
 		return "", fmt.Errorf(gjson.Get(str, "message").String())
 	}
+
 	friends := gjson.Get(str, "data.items_list")
+
 	return friends.String(), nil
 }
 
@@ -413,6 +438,7 @@ func GetCodeMulDelList(photo gjson.Result) string {
 	} else {
 		utstr = photo.Get("uploadTime").String()
 	}
+
 	ut, _ := time.Parse("2006-01-02 15:04:05", utstr)
 	uploadtime := ut.Unix()
 	forum := photo.Get("forum").String()
@@ -420,12 +446,13 @@ func GetCodeMulDelList(photo gjson.Result) string {
 	if photo.Get("shorturl").Exists() {
 		shorturl = strings.Replace(photo.Get("shorturl").String(), " ", "", -1)
 	}
+
 	sloc := photo.Get("sloc").String()
 	phototype := photo.Get("phototype").String()
 	origin := 0
 	if photo.Get("origin").Exists() {
-		origin =  1
+		origin = 1
 	}
+
 	return fmt.Sprintf("%v|%v|%v|%v|%v|%v|%v|%v", lloc, picrefer, uploadtime, forum, shorturl, sloc, phototype, origin)
 }
-

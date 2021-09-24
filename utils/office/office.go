@@ -8,8 +8,8 @@ import (
 	"os"
 	"github.com/360EntSecGroup-Skylar/excelize/v2"
 	"path/filepath"
-	"qq-zone/utils/filer"
-	"qq-zone/utils/helper"
+	"github.com/qinjintian/qq-zone/utils/filer"
+	"github.com/qinjintian/qq-zone/utils/helper"
 	"time"
 	"encoding/csv"
 )

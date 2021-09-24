@@ -3,15 +3,15 @@ package controllers
 import (
 	"bufio"
 	"fmt"
+	"github.com/qinjintian/qq-zone/utils/filer"
+	"github.com/qinjintian/qq-zone/utils/helper"
+	"github.com/qinjintian/qq-zone/utils/logger"
+	ihttp "github.com/qinjintian/qq-zone/utils/net/http"
+	"github.com/qinjintian/qq-zone/utils/qzone"
 	"github.com/tidwall/gjson"
-	pgkurl "net/url"
+	iurl "net/url"
 	"os"
 	"path/filepath"
-	"qq-zone/utils/filer"
-	"qq-zone/utils/helper"
-	"qq-zone/utils/logger"
-	myhttp "qq-zone/utils/net/http"
-	"qq-zone/utils/qzone"
 	"reflect"
 	"strconv"
 	"strings"
@@ -20,24 +20,23 @@ import (
 )
 
 type QzoneController struct {
-	BaseController
 	ticker     *time.Ticker      // 定时器
 	whitelist  map[string]bool   // 要下载的相册
 	localFiles map[string]string // 当前本地相册已经存在的文件
 }
 
 var (
-	mutex       sync.Mutex     // 互斥锁，下载数累加解决竞态
-	chans       chan struct{}  // 缓冲信道控制并行下载的任务数
-	waiterIn    sync.WaitGroup // 等待当前相册下载完才能继续下一个相册
-	waiterOut   sync.WaitGroup // 等待所有相片下载完才能继续往下执行
-	total       uint64 = 0     // 总数
-	addTotal    uint64 = 0     // 新增数
-	succTotal   uint64 = 0     // 成功数
-	videoTotal  uint64 = 0     // 视频数
-	imageTotal  uint64 = 0     // 相片数
-	repeatTotal uint64 = 0     // 重复数
-	sequence    uint64 = 0     // 正在下载的相册相片的索引位置
+	mutex       sync.Mutex         // 互斥锁，下载数累加解决竞态
+	chans       chan struct{}      // 缓冲信道控制并行下载的任务数
+	waiterIn    sync.WaitGroup     // 等待当前相册下载完才能继续下一个相册
+	waiterOut   sync.WaitGroup     // 等待所有相片下载完才能继续往下执行
+	total       uint64         = 0 // 总数
+	addTotal    uint64         = 0 // 新增数
+	succTotal   uint64         = 0 // 成功数
+	videoTotal  uint64         = 0 // 视频数
+	imageTotal  uint64         = 0 // 相片数
+	repeatTotal uint64         = 0 // 重复数
+	sequence    uint64         = 0 // 正在下载的相册相片的索引位置
 )
 
 const (
@@ -176,7 +175,7 @@ Start:
 
 	// 登陆成功之后删掉二维码
 	if filer.IsFile(QRCODE_SAVE_PATH) {
-		os.Remove(QRCODE_SAVE_PATH)
+		_ = os.Remove(QRCODE_SAVE_PATH)
 	}
 
 	gtk := res["g_tk"]
@@ -194,16 +193,21 @@ Start:
 			q.initResult() // 初始化结果
 		Retry:
 			err := q.readyDownload(qq, fqq, cookie, gtk, exclude)
+
 			// 删除本次访问好友空间痕迹
-			q.delVisitRecord(gtk, cookie, qq, fqq)
+			_ = q.delVisitRecord(gtk, cookie, qq, fqq)
+
 			if err != nil {
 				fmt.Println(err)
+
 				menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 跳过错误继续进行下一个账号", "⒉ 重试该账号", "⒊ 结束退出"}
+
 				fmt.Println()
 				for _, v := range menus {
 					fmt.Println(v)
 				}
 				fmt.Println()
+
 				scanner := bufio.NewScanner(os.Stdin)
 				for {
 					fmt.Print("请输入数字再按回车键：")
@@ -227,12 +231,12 @@ Start:
 
 			if exclude {
 				if repeatTotal > 0 {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal, repeatTotal))
 				} else {
-					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
+					fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal, repeatTotal))
 				}
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), fqq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal))
 			}
 
 			if index < (len(friendQQ) - 1) {
@@ -244,6 +248,7 @@ Start:
 		}
 	} else {
 		q.initResult() // 初始化结果
+
 		err := q.readyDownload(qq, "", cookie, gtk, exclude)
 		if err != nil {
 			fmt.Println(err)
@@ -252,12 +257,12 @@ Start:
 
 		if exclude {
 			if repeatTotal > 0 {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d, 已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal, repeatTotal))
 			} else {
-				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal, repeatTotal))
+				fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d, 失败%d，已存在%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal, repeatTotal))
 			}
 		} else {
-			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total - succTotal))
+			fmt.Println(fmt.Sprintf("%v QQ空间[%v]相片/视频下载完成，共有%d张相片/视频，已保存%d张相片/视频，其中%d张相片, %d部视频, 包含新增%d，失败%d", time.Now().Format("2006/01/02 15:04:05"), qq, total, succTotal, imageTotal, videoTotal, addTotal, total-succTotal))
 		}
 	}
 
@@ -278,11 +283,11 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 	if friendQQ == "" {
 		hostUin = qq
 	}
+
 	url := qzone.GetAlbumListUrl(hostUin, uin, gtk)
 	list, err := qzone.GetAlbumList(url, header)
 	if err != nil {
 		return err
-
 	}
 
 	go q.heartbeat(url, header)
@@ -310,7 +315,9 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		if name[len(name)-1:] == "." {
 			name = strings.ReplaceAll(name, ".", "")
 		}
-		apath := strings.Trim(baseDir + name, " ")
+
+		apath := strings.Trim(baseDir+name, " ")
+
 	RetryCreateDir:
 		err := os.MkdirAll(apath, os.ModePerm)
 		if err != nil {
@@ -322,6 +329,7 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		if err != nil {
 			return err
 		}
+
 		photoTotal := len(photos)
 		total += uint64(photoTotal) // 累加相片/视频总数
 
@@ -334,11 +342,12 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 				q.localFiles[filename] = path
 			}
 		} else {
-			os.RemoveAll(apath) // 把当前本地相册删掉重新创建空相册然后下载文件，相当于清空目录资源
-			os.MkdirAll(apath, os.ModePerm)
+			_ = os.RemoveAll(apath) // 把当前本地相册删掉重新创建空相册然后下载文件，相当于清空目录资源
+			_ = os.MkdirAll(apath, os.ModePerm)
 		}
 
 		sequence = 0 // 重新初始化为0
+
 		// 正在下载处理
 		for key, photo := range photos {
 			waiterIn.Add(1)
@@ -346,9 +355,12 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 			chans <- struct{}{}
 			go q.StartDownload(hostUin, uin, gtk, cookie, key, photo, album, apath, photoTotal, exclude)
 		}
+
 		waiterIn.Wait() // 等待当前相册相片下载完之后才能继续下载下一个相册
 	}
+
 	waiterOut.Wait()
+
 	return nil
 }
 
@@ -386,12 +398,13 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	if photo.Get("is_video").Bool() {
 		cate = "视频"
 		url := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", gtk, album.Get("id").String(), sloc, uin, hostUin)
-		_, b, err := myhttp.Get(url, header)
+		_, b, err := ihttp.Get(url, header)
 		if err != nil {
 			fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, err.Error()))
 			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url, err.Error()))
 			return
 		}
+
 		str := string(b)
 		str = str[16:strings.LastIndex(str, ")")]
 		if !gjson.Valid(str) {
@@ -399,6 +412,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频获取下载链接出错，视频名：%s  视频地址：%s  错误信息：invalid json", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
 			return
 		}
+
 		data := gjson.Parse(str).Get("data")
 		videos := data.Get("photos").Array()
 		if len(videos) < 1 {
@@ -406,6 +420,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			logger.Println(fmt.Sprintf("%v QQ( %v )的相册[%s]第%d部视频链接未找到，视频名：%s  视频地址：%s", time.Now().Format("2006/01/02 15:04:05"), hostUin, album.Get("name").String(), key+1, photo.Get("name").String(), url))
 			return
 		}
+
 		picPosInPage := data.Get("picPosInPage").Int()
 		video := videos[picPosInPage]
 		videoInfo := video.Get("video_info").Map()
@@ -423,10 +438,11 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		header["Accept-Encoding"] = "identity;q=1, *;q=0"
 		header["Connection"] = "keep-alive"
 		header["Host"] = ""
-		u, err := pgkurl.Parse(source)
+		u, err := iurl.Parse(source)
 		if err == nil {
 			header["Host"] = u.Host
 		}
+
 		header["Range"] = "bytes=0-"
 		header["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", hostUin)
 		header["Sec-Fetch-Dest"] = "video"
@@ -444,6 +460,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		} else {
 			source = photo.Get("url").String()
 		}
+
 		// QQ空间相片有不同的文件后缀名，那么不传后缀名的文件名下载的时候会自动获取到对应的文件扩展名
 		filename = fmt.Sprintf("IMG_%s_%s_%s", shootdate[:8], shootdate[8:], helper.Md5(sloc)[8:24])
 	}
@@ -458,7 +475,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 
 		if p, ok := q.localFiles[tmpName]; ok {
 			// 假如本地已经存在这个文件名，那就匹配文件大小是否一致
-			head, err := myhttp.Head(source, header)
+			head, err := ihttp.Head(source, header)
 			if err != nil {
 				// 如果该文件地址失效了那也不要删本地已存在的文件
 				return
@@ -467,17 +484,20 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 				fileInfo, _ := os.Stat(p)
 				fsize := fileInfo.Size()
 				if fs > fsize {
-					os.RemoveAll(q.localFiles[tmpName])
+					_ = os.RemoveAll(q.localFiles[tmpName])
 				} else {
 					mutex.Lock()
+
 					if photo.Get("is_video").Bool() {
 						videoTotal++
 					} else {
 						imageTotal++
 					}
+
 					succTotal++
 					sequence++
 					repeatTotal++
+
 					output := fmt.Sprintf("[%d/%d]相册[%s]第%d个%s文件下载完成_跳过同名文件", sequence, photoTotal, album.Get("name").String(), key+1, cate) + "\n" +
 						"当前/账号信息：" + hostUin + "\n" +
 						"下载/完成时间：" + time.Now().Format("2006/01/02 15:04:05") + "\n" +
@@ -486,7 +506,9 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 						"相片/视频大小：" + filer.FormatBytes(fsize) + "\n" +
 						"相片/视频地址：" + source + "\n"
 					fmt.Println(output)
+
 					mutex.Unlock()
+
 					return
 				}
 			}
@@ -494,7 +516,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 	}
 
 	target := fmt.Sprintf("%s/%s", apath, filename)
-	resp, err := myhttp.Download(source, target, header, 5, 600, false)
+	resp, err := ihttp.Download(source, target, header, 5, 600, false)
 	if err != nil {
 		// 记录 某个相册 下载失败的相片
 		fmt.Println(time.Now().Format("2006/01/02 15:04:05"), fmt.Sprintf("QQ( %v )的相册[%s]第%d个%s文件下载出错，相片/视频名：%s  相片/视频地址：%s  相册列表页地址：%s  错误信息：%s\n", hostUin, album.Get("name").String(), key+1, cate, photo.Get("name").String(), source, photo.Get("url").String(), err.Error()))
@@ -502,6 +524,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		return
 	} else {
 		mutex.Lock()
+
 		succTotal++
 		sequence++
 		addTotal++
@@ -520,6 +543,7 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 			"相片/视频大小：" + filer.FormatBytes(fileInfo.Size()) + "\n" +
 			"相片/视频地址：" + source + "\n"
 		fmt.Println(output)
+
 		mutex.Unlock()
 	}
 }
@@ -554,7 +578,7 @@ Start:
 
 	// 登陆成功之后删掉二维码
 	if filer.IsFile(QRCODE_SAVE_PATH) {
-		os.Remove(QRCODE_SAVE_PATH)
+		_ = os.Remove(QRCODE_SAVE_PATH)
 	}
 
 	gtk := res["g_tk"]
@@ -601,7 +625,7 @@ Start:
 			body, err := qzone.GetAlbumList(url, header)
 
 			// 删除本次访问好友空间痕迹
-			q.delVisitRecord(gtk, cookie, qq, hostUin)
+			_ = q.delVisitRecord(gtk, cookie, qq, hostUin)
 
 			if err != nil {
 				return
@@ -636,6 +660,7 @@ Start:
 			}
 		}(val)
 	}
+
 	swg.Wait()
 	close(ch)
 	q.menu()
@@ -646,7 +671,7 @@ func (q *QzoneController) heartbeat(url string, header map[string]string) {
 	q.ticker = time.NewTicker(time.Minute * 10)
 	for t := range q.ticker.C {
 		t.Format("2006/01/02 15:04:05")
-		myhttp.Head(url, header)
+		_, _ = ihttp.Head(url, header)
 	}
 }
 
@@ -664,10 +689,11 @@ func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
 	params["entrance"] = "4"
 	params["qzreferrer"] = fmt.Sprintf("https://user.qzone.qq.com/%v/infocenter", vuin)
 	url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/tfriend/friendshow_hide_visitor_onelogin?&g_tk=%v", gtk)
-	b, err := myhttp.PostForm(url, params, header)
+	b, err := ihttp.PostForm(url, params, header)
 	if err != nil {
 		return err
 	}
+
 	str := string(b)
 	beginSign := "callback("
 	beginSignIndex := strings.LastIndex(str, beginSign)
@@ -685,17 +711,20 @@ func (q *QzoneController) delVisitRecord(gtk, cookie, vuin, huin string) error {
 	if gjson.Get(json, "ret").Int() != 0 {
 		return fmt.Errorf("Failed to delete access record")
 	}
+
 	return nil
 }
 
 // 菜单选项
 func (q *QzoneController) menu() {
 	menus := []string{"※※※※※※※※※※※※ 菜 单 选 项 ※※※※※※※※※※※", "⒈ 下载自己的相册相片/视频", "⒉ 下载好友的相册相片/视频", "⒊ 列出对我开放空间权限的好友", "⒋ 列出对我公开相册权限的好友", "⒌ 结束退出"}
+
 	fmt.Println()
 	for _, v := range menus {
 		fmt.Println(v)
 	}
 	fmt.Println()
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("请输入数字再按回车键：")
@@ -706,6 +735,7 @@ func (q *QzoneController) menu() {
 			fmt.Println("(T＿T)输入不正确，请输入菜单选项可选数字~~~")
 			continue
 		}
+
 		switch input {
 		case 1:
 			q.spiderAlbum(1)
@@ -718,6 +748,7 @@ func (q *QzoneController) menu() {
 		case 5:
 			os.Exit(0)
 		}
+
 		q.menu()
 	}
 }
