@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	pbar "github.com/cheggaaa/pb/v3"
+	"github.com/qinjintian/qq-zone/utils/filer"
 	"io"
 	"io/ioutil"
 	"mime"
@@ -13,7 +14,6 @@ import (
 	pkgurl "net/url"
 	"os"
 	"path/filepath"
-	"qq-zone/utils/filer"
 	"strings"
 	"time"
 )

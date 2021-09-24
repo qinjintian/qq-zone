@@ -1,7 +1,7 @@
 package main
 
 import (
-	"qq-zone/app/controllers"
+	"github.com/qinjintian/qq-zone/app/controllers"
 )
 
 func main() {

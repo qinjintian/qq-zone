@@ -1,4 +1,4 @@
-module qq-zone
+module github.com/qinjintian/qq-zone
 
 go 1.16
 
