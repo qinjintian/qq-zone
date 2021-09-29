@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+type Qzone struct {}
+
 const (
 	QRCODE_SAVE_PATH = "qrcode.png"
 	USER_AGENT       = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36"
@@ -23,12 +25,13 @@ const (
 
 // 登录获取g_tk和cookie参数才能进入相册
 func Login() (map[string]string, error) {
-	r, err := loopIfLogin()
+	q := new(Qzone)
+	r, err := q.loopIfLogin()
 	if err != nil {
 		return nil, err
 	}
 
-	identity, err := credential(r["redirect"])
+	identity, err := q.credential(r["redirect"])
 	if err != nil {
 		return nil, err
 	}
@@ -42,20 +45,20 @@ func Login() (map[string]string, error) {
 }
 
 // 循环检查用户是否扫描成功以及是否登录成功
-func loopIfLogin() (map[string]string, error) {
+func (q *Qzone) loopIfLogin() (map[string]string, error) {
 StartLoop:
-	loginSig, err := getLoginSig()
+	loginSig, err := q.getLoginSig()
 	if err != nil {
 		return nil, err
 	}
 
-	header, err := getQRC()
+	header, err := q.getQRC()
 	if err != nil {
 		return nil, err
 	}
 
 	qrsig := strings.Replace(strings.Split(header.Get("Set-Cookie"), ";")[0], "qrsig=", "", 1)
-	ptqrtoken := ptqrtoken(qrsig)
+	ptqrtoken := q.ptqrtoken(qrsig)
 
 	var (
 		isFirstLoop bool
@@ -64,7 +67,7 @@ StartLoop:
 
 OuterLoop:
 	for {
-		str, err := ifLogin(ptqrtoken, loginSig, qrsig)
+		str, err := q.ifLogin(ptqrtoken, loginSig, qrsig)
 		if err != nil {
 			return nil, err
 		}
@@ -110,11 +113,11 @@ OuterLoop:
 }
 
 // 检查用户是否扫描成功以及是否登录成功
-func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
+func (q *Qzone) ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 	header := make(map[string]string)
 	header["user-agent"] = USER_AGENT
 	header["cookie"] = fmt.Sprintf("qrsig=%s;", qrsig)
-	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", iurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, action(), loginSig)
+	url := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=%v&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", iurl.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, q.action(), loginSig)
 
 	_, b, err := ihttp.Get(url, header)
 	if err != nil {
@@ -125,13 +128,13 @@ func ifLogin(ptqrtoken string, loginSig string, qrsig string) (string, error) {
 }
 
 // 随机数
-func t() string {
+func (q *Qzone) t() string {
 	return strconv.FormatFloat(rand.Float64(), 'g', -1, 64)
 }
 
 // 获取二维码
-func getQRC() (http.Header, error) {
-	url := "https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=" + t() + "&daid=5&pt_3rd_aid=0"
+func (q *Qzone) getQRC() (http.Header, error) {
+	url := "https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=" + q.t() + "&daid=5&pt_3rd_aid=0"
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -153,7 +156,7 @@ func getQRC() (http.Header, error) {
 }
 
 // 获取login_sig参数
-func getLoginSig() (string, error) {
+func (q *Qzone) getLoginSig() (string, error) {
 	url := "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?proxy_url=https://qzs.qq.com/qzone/v6/portal/proxy.html&daid=5&&hide_title_bar=1&low_login=0&qlogin_auto_login=1&no_verifyimg=1&link_target=blank&appid=549000912&style=22&target=self&s_url=https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone&pt_qr_app=手机QQ空间&pt_qr_link=https://z.qzone.com/download.html&self_regurl=https://qzs.qq.com/qzone/v6/reg/index.html&pt_qr_help_link=https://z.qzone.com/download.html&pt_no_auth=0"
 	resp, err := http.Get(url)
 	if err != nil {
@@ -189,7 +192,7 @@ func getLoginSig() (string, error) {
  * 获获取ptqrttoken参数
  * header http.Header 将获取二维码接口的headers传进来
  */
-func ptqrtoken(qrsig string) string {
+func (q *Qzone) ptqrtoken(qrsig string) string {
 	e := 0
 	for i := 0; i < len(qrsig); i++ {
 		e += (e << 5) + int(qrsig[i])
@@ -199,12 +202,12 @@ func ptqrtoken(qrsig string) string {
 }
 
 // 获取action参数
-func action() string {
+func (q *Qzone) action() string {
 	return fmt.Sprintf("0-0-%d", time.Now().Unix()*1000)
 }
 
 // 登录成功，验证进入空间的签名
-func credential(url string) (map[string]string, error) {
+func (q *Qzone) credential(url string) (map[string]string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -243,14 +246,14 @@ func credential(url string) (map[string]string, error) {
 	}
 
 	res := make(map[string]string)
-	res["g_tk"] = gtk(p_skey)
+	res["g_tk"] = q.gtk(p_skey)
 	res["cookie"] = strings.Join(cookie, "; ")
 
 	return res, nil
 }
 
 // 获取登录成功之后的g_tk参数
-func gtk(skey string) string {
+func (q *Qzone) gtk(skey string) string {
 	h := 5381
 	for i := 0; i < len(skey); i++ {
 		h += (h << 5) + int(skey[i])

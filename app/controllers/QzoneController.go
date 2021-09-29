@@ -632,7 +632,7 @@ Start:
 			}
 
 			if option == 1 {
-				fmt.Println(fmt.Sprintf("账号：%v  昵称：%v", hostUin, nickname))
+				fmt.Println(fmt.Sprintf("账号: %v  昵称: %v", hostUin, nickname))
 			} else {
 				albums := gjson.Parse(body).Array()
 				totalInPageModeSort := len(albums) // totalInPageModeSort 包含了需要密码才能访问的相册
@@ -654,7 +654,7 @@ Start:
 							}
 							displays += val + " "
 						}
-						fmt.Println(fmt.Sprintf("账号：%v  昵称：%v 相册数：%v 相册名[大于6个时仅显示前面6个]：%v", hostUin, nickname, totalInPageModeSort, displays))
+						fmt.Println(fmt.Sprintf("账号: %v  昵称: %v 相册数: %v 相册名[大于6个时仅显示前面6个]: %v", hostUin, nickname, totalInPageModeSort, displays))
 					}
 				}
 			}

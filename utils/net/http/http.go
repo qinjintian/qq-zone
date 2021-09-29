@@ -82,7 +82,7 @@ func Head(url string, headers map[string]string) (http.Header, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300  {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("The http request failed, the status code is: %s", resp.Status)
 	}
 	return resp.Header, nil
@@ -196,7 +196,7 @@ func Download(uri string, target string, headers map[string]string, msgs ...inte
 	}
 
 	if !filer.IsDir(targetDir) {
-		os.MkdirAll(targetDir, os.ModePerm)
+		_ = os.MkdirAll(targetDir, os.ModePerm)
 	}
 
 	retry := 0
@@ -274,7 +274,7 @@ func Download(uri string, target string, headers map[string]string, msgs ...inte
 
 	var (
 		size          int64 = 0
-		contentLength = hresp.ContentLength
+		contentLength       = hresp.ContentLength
 	)
 
 	if filer.IsFile(target) {
