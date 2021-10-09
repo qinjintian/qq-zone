@@ -273,11 +273,11 @@ func GetAlbumList(hostUin, uin, gtk, cookie string) ([]gjson.Result, error) {
 	headers["user-agent"] = USER_AGENT
 
 	var (
-		pageStart = 0
-		pageNum   = 30
+		pageStart int64 = 0
+		pageNum int64 = 30
 	)
 
-	var data []gjson.Result // 相册列表
+	var data []gjson.Result
 
 	for {
 		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&mode=2&pageStart=%d&pageNum=%d&callbackFun=shine", gtk, hostUin, uin, pageStart, pageNum)
@@ -312,11 +312,12 @@ func GetAlbumList(hostUin, uin, gtk, cookie string) ([]gjson.Result, error) {
 			}
 		}
 
-		if t.Get("nextPageStart").Int() == t.Get("albumsInUser").Int() {
+		nextPageStart := t.Get("nextPageStart").Int()
+		if nextPageStart == t.Get("albumsInUser").Int() {
 			break
 		}
 
-		pageStart += 30
+		pageStart = nextPageStart
 	}
 
 	return data, nil
