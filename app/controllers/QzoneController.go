@@ -284,15 +284,13 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 		hostUin = qq
 	}
 
-	url := qzone.GetAlbumListUrl(hostUin, uin, gtk)
-	list, err := qzone.GetAlbumList(url, header)
+	go q.heartbeat(qzone.GetAlbumListUrl(hostUin, uin, gtk), header)
+
+	albums, err := qzone.GetAlbumList(hostUin, uin, gtk, cookie)
 	if err != nil {
 		return err
 	}
 
-	go q.heartbeat(url, header)
-
-	var albums = gjson.Parse(list).Array()
 	if len(albums) < 1 {
 		return fmt.Errorf("（。・＿・。）ﾉ 该账号( %v )没有可访问的相册~~~", hostUin)
 	}
@@ -621,8 +619,7 @@ Start:
 				}
 			}()
 
-			url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine0_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine0", gtk, hostUin, qq)
-			body, err := qzone.GetAlbumList(url, header)
+			albums, err := qzone.GetAlbumList(hostUin, qq, gtk, cookie)
 
 			// 删除本次访问好友空间痕迹
 			_ = q.delVisitRecord(gtk, cookie, qq, hostUin)
@@ -634,7 +631,6 @@ Start:
 			if option == 1 {
 				fmt.Println(fmt.Sprintf("账号: %v  昵称: %v", hostUin, nickname))
 			} else {
-				albums := gjson.Parse(body).Array()
 				totalInPageModeSort := len(albums) // totalInPageModeSort 包含了需要密码才能访问的相册
 				if totalInPageModeSort > 0 {
 					// 排除掉需要密码才能访问的相册

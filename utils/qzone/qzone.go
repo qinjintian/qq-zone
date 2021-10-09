@@ -1,7 +1,6 @@
 package qzone
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	ihttp "github.com/qinjintian/qq-zone/utils/net/http"
@@ -16,7 +15,7 @@ import (
 	"time"
 )
 
-type Qzone struct {}
+type Qzone struct{}
 
 const (
 	QRCODE_SAVE_PATH = "qrcode.png"
@@ -263,69 +262,64 @@ func (q *Qzone) gtk(skey string) string {
 }
 
 // 获取相册列表地址
-func GetAlbumListUrl(hostUin string, uin string, g_tk string) string {
-	return fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", g_tk, hostUin, uin)
+func GetAlbumListUrl(hostUin string, uin string, gtk string) string {
+	return fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", gtk, hostUin, uin)
 }
 
 // 获取相册列表数据
-func GetAlbumList(url string, header map[string]string) (string, error) {
-	_, b, err := ihttp.Get(url, header)
-	if err != nil {
-		return "", fmt.Errorf("（。・＿・。）ﾉ获取相册列表出错：%s", err.Error())
-	}
+func GetAlbumList(hostUin, uin, gtk, cookie string) ([]gjson.Result, error) {
+	headers := make(map[string]string)
+	headers["cookie"] = cookie
+	headers["user-agent"] = USER_AGENT
 
-	u, err := iurl.Parse(url)
-	if err != nil {
-		return "", err
-	}
+	var (
+		pageStart = 0
+		pageNum   = 30
+	)
 
-	callbackFunName := u.Query().Get("callbackFun") + "_Callback"
-	str := string(b)
-	str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
-	if !gjson.Valid(str) {
-		return "", fmt.Errorf("invalid json")
-	}
+	var data []gjson.Result // 相册列表
 
-	result := gjson.Parse(str)
-	if result.Get("code").Int() != 0 {
-		return "", fmt.Errorf(gjson.Get(str, "message").String())
-	}
+	for {
+		url := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&mode=2&pageStart=%d&pageNum=%d&callbackFun=shine", gtk, hostUin, uin, pageStart, pageNum)
+		_, b, err := ihttp.Get(url, headers)
+		if err != nil {
+			return nil, fmt.Errorf("（。・＿・。）ﾉ获取相册列表第%d页出错：%s", pageStart/pageNum+1, err.Error())
+		}
 
-	albumList := ""
-	mode := result.Get("data.mode").Int()
-	switch mode {
-	case 0:
-		albumList = result.Get("data.albumList").String()
+		u, err := iurl.Parse(url)
+		if err != nil {
+			return nil, err
+		}
 
-	case 2:
-		// 展示设置 - 普通视图
-		albumList = result.Get("data.albumListModeSort").String()
+		callbackFunName := u.Query().Get("callbackFun") + "_Callback"
+		str := string(b)
+		str = str[len(callbackFunName)+1 : strings.LastIndex(str, ")")]
+		if !gjson.Valid(str) {
+			return nil, fmt.Errorf("相册列表第%d页返回json无效", pageStart/pageNum+1)
+		}
 
-	case 3:
-		// 展示设置 - 分类视图
-		r := make([]interface{}, 0)
-		albumListModeClass := result.Get("data.albumListModeClass").Array()
-		for _, items := range albumListModeClass {
-			albumListArrs := items.Get("albumList").Array()
-			for _, album := range albumListArrs {
-				r = append(r, album.Value())
+		result := gjson.Parse(str)
+		if result.Get("code").Int() != 0 {
+			return nil, fmt.Errorf("相册列表第%d页错误: %s", pageStart/pageNum+1, gjson.Get(str, "message").String())
+		}
+
+		t := result.Get("data")
+
+		if t.Get("albumList").Exists() {
+			albumList := t.Get("albumList").Array()
+			for _, album := range albumList {
+				data = append(data, album)
 			}
 		}
 
-		b, err := json.Marshal(r)
-		if err != nil {
-			return "", err
+		if t.Get("nextPageStart").Int() == t.Get("albumsInUser").Int() {
+			break
 		}
 
-		str := string(b)
-		if gjson.Valid(str) {
-			albumList = str
-		} else {
-			return "", fmt.Errorf("（。・＿・。）ﾉ 该账号没有获取到任何相册哦~~")
-		}
+		pageStart += 30
 	}
 
-	return albumList, nil
+	return data, nil
 }
 
 // 获取相片列表数据
