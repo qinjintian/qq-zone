@@ -431,6 +431,9 @@ func (q *QzoneController) StartDownload(hostUin, uin, gtk, cookie string, key in
 		}
 
 		source = videoInfo["video_url"].String()
+		if videoInfo["download_url"].String() != "" {
+			source = videoInfo["download_url"].String()
+		}
 
 		header["Accept"] = "*/*"
 		header["Accept-Encoding"] = "identity;q=1, *;q=0"
