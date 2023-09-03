@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	pbar "github.com/cheggaaa/pb/v3"
+	"github.com/qinjintian/qq-zone/utils"
 	"github.com/qinjintian/qq-zone/utils/filer"
 	"io"
 	"io/ioutil"
@@ -266,7 +267,7 @@ func Download(uri string, target string, headers map[string]string, msgs ...inte
 	if contentType != "" && entension == "" {
 		exts, err := mime.ExtensionsByType(contentType)
 		if err == nil && len(exts) > 0 {
-			entension = exts[0]
+			entension = utils.MIMEs2Ext(exts)
 			filename = fmt.Sprintf("%s%s", filename, entension)
 			target = fmt.Sprintf("%s/%s", targetDir, filename)
 		}
