@@ -325,7 +325,9 @@ func (q *QzoneController) readyDownload(qq, friendQQ, cookie, gtk string, exclud
 
 		photos, err := qzone.GetPhotoList(hostUin, uin, &cookie, gtk, album)
 		if err != nil {
-			return err
+			// 出错的相册留下错误信息，跳过
+			os.WriteFile(apath+"/error.txt", []byte(err.Error()), os.ModePerm)
+			continue
 		}
 
 		photoTotal := len(photos)
