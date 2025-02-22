@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type QzoneController struct {
@@ -153,12 +154,20 @@ Start:
 		break
 	}
 
-	fmt.Printf("请输入要下载的相册名，多个相册用空格键隔开，格式[相册1 相册2]，不输入默认下载全部相册：")
+	fmt.Printf("请输入要用来分隔相册名的单个字符，不输入默认使用空格：")
+	scanner.Scan()
+	separator := scanner.Text()
+	if utf8.RuneCountInString(separator) != 1 {
+		fmt.Printf("无法识别，使用空格。")
+		separator = " "
+	}
+
+	fmt.Printf("请输入要下载的相册名，多个相册用[%s]隔开，格式[相册1%s相册2]，不输入默认下载全部相册：", separator, separator)
 	scanner.Scan()
 	str := scanner.Text()
 	var albums []string
 	if str != "" {
-		albums = strings.Split(str, " ")
+		albums = strings.Split(str, separator)
 	}
 
 	// 指定要下载的相册
