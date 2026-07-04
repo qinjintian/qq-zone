@@ -286,13 +286,22 @@ func (c *Client) GetVideoDownloadURL(targetUin string, albumID string, picKey st
 
 	video := photos[res.Get("data.picPosInPage").Int()]
 	vInfo := video.Get("video_info")
-	if vInfo.Get("status").Int() != 2 {
-		return "", fmt.Errorf("video is not ready (status: %d)", vInfo.Get("status").Int())
-	}
 
+	// 优先获取 download_url 或 video_url，只要有链接就尝试下载，忽略 status 限制
 	downloadURL := vInfo.Get("download_url").String()
 	if downloadURL == "" {
 		downloadURL = vInfo.Get("video_url").String()
+	}
+
+	// 如果仍然为空，且状态不为 2，才报错
+	if downloadURL == "" && vInfo.Get("status").Int() != 2 {
+		return "", fmt.Errorf("video is not ready and no URL found (status: %d, video_info: %s)", vInfo.Get("status").Int(), vInfo.Raw)
+	}
+
+	// 尝试将品质从 f20 等低清晰度提升到 f0 (原画)
+	// 注意：由于分布式存储，f0 可能在某些节点尚未同步。如果后续下载 404，请考虑取消此替换。
+	if strings.Contains(downloadURL, ".f20.mp4") {
+		downloadURL = strings.Replace(downloadURL, ".f20.mp4", ".f0.mp4", 1)
 	}
 
 	return downloadURL, nil
