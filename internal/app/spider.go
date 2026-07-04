@@ -168,28 +168,49 @@ func (s *Spider) downloadItem(ctx context.Context, targetUin string, idx int, ph
 	}
 
 	shootTime := photo.Get("rawshoottime").String()
-	if shootTime == "" {
+	if shootTime == "" || shootTime == "0" {
 		shootTime = photo.Get("uploadtime").String()
 	}
 
 	loc, _ := time.LoadLocation("Local")
-	t, _ := time.ParseInLocation("2006-01-02 15:04:05", shootTime, loc)
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", shootTime, loc)
+	if err != nil {
+		// 如果解析失败，尝试解析上传时间
+		uploadTime := photo.Get("uploadtime").String()
+		t, _ = time.ParseInLocation("2006-01-02 15:04:05", uploadTime, loc)
+	}
 	shootDate := t.Format("20060102150405")
 
 	var source, filename string
 	isVideo := photo.Get("is_video").Bool()
+	picrefer := photo.Get("picrefer").Int()
+	// 实况图特征：是视频类型，且 picrefer 为 0
+	isLivePhoto := isVideo && picrefer == 0
 
+	// 1. 优先处理视频逻辑 (正规视频 和 实况图的视频部分)
 	if isVideo {
-		var err error
-		source, err = s.client.GetVideoDownloadURL(targetUin, album.Get("id").String(), sloc)
-		if err != nil {
-			s.mu.Lock()
-			s.results.Failed++
-			s.mu.Unlock()
-			return err
+		videoURL, err := s.client.GetVideoDownloadURL(targetUin, album.Get("id").String(), sloc)
+		if err == nil && videoURL != "" {
+			prefix := "VID_"
+			if isLivePhoto {
+				prefix = "MVIMG_"
+			}
+			filename = fmt.Sprintf("%s%s_%s_%s.mp4", prefix, shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
+			source = videoURL
+		} else {
+			if !isLivePhoto {
+				// 纯视频获取地址失败才报错
+				s.mu.Lock()
+				s.results.Failed++
+				s.mu.Unlock()
+				return err
+			}
+			s.logger.Warnf("Could not get video component for Live Photo %s, falling back to image only", sloc)
 		}
-		filename = fmt.Sprintf("VID_%s_%s_%s.mp4", shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
-	} else {
+	}
+
+	// 2. 处理照片逻辑 (仅针对 静态图 或 视频获取失败的实况图)
+	if filename == "" {
 		source = photo.Get("raw").String()
 		if source == "" {
 			source = photo.Get("origin_url").String()
@@ -197,7 +218,18 @@ func (s *Spider) downloadItem(ctx context.Context, targetUin string, idx int, ph
 		if source == "" {
 			source = photo.Get("url").String()
 		}
-		filename = fmt.Sprintf("IMG_%s_%s_%s", shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
+
+		// 强制获取“原图”版本
+		if strings.Contains(source, "b&bo=") {
+			source = strings.Replace(source, "b&bo=", "o&bo=", 1)
+		}
+
+		prefix := "IMG_"
+		if isLivePhoto {
+			prefix = "MVIMG_"
+		}
+
+		filename = fmt.Sprintf("%s%s_%s_%s", prefix, shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
 		ext := ".jpg"
 		if strings.Contains(source, ".png") {
 			ext = ".png"

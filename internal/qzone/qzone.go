@@ -29,6 +29,8 @@ import (
 	"time"
 
 	ihttp "github.com/qinjintian/qq-zone/internal/net/http"
+	goqrcode "github.com/skip2/go-qrcode"
+	"github.com/tuotoo/qrcode"
 )
 
 const (
@@ -51,6 +53,8 @@ func NewLoginHandler(httpClient *ihttp.Client) *LoginHandler {
 // Login performs the QR code login flow
 func (q *LoginHandler) Login() (map[string]string, error) {
 	r, err := q.loopUntilLogin()
+	// 无论登录成功还是失败，都清理掉根目录下的二维码图片
+	_ = os.Remove(QRCodeSavePath)
 	if err != nil {
 		return nil, err
 	}
@@ -122,10 +126,11 @@ StartLoop:
 			fmt.Println(time.Now().Format("15:04:05"), "二维码失效，正在重新生成...")
 			goto StartLoop
 		case "66":
-			if !isFirstLoop {
-				fmt.Println(time.Now().Format("15:04:05"), "二维码已生成 (qrcode.png)，请扫码登录")
+			if isFirstLoop {
+				fmt.Println(time.Now().Format("15:04:05"), "二维码已生成，请扫码登录")
+				q.printQRCodeToTerminal()
 			}
-			isFirstLoop = true
+			isFirstLoop = false
 		case "67":
 			fmt.Println(time.Now().Format("15:04:05"), "已扫码，请在手机上点击确认")
 			isFirstLoop = true
@@ -282,6 +287,29 @@ func (q *LoginHandler) getCredentials(redirectURL string, initialCookies string)
 		"g_tk":   g_tk,
 		"cookie": strings.Join(cookieParts, "; "),
 	}, nil
+}
+
+func (q *LoginHandler) printQRCodeToTerminal() {
+	fi, err := os.Open(QRCodeSavePath)
+	if err != nil {
+		return
+	}
+	defer fi.Close()
+
+	// 解码图片获取真实的授权链接
+	qrmatrix, err := qrcode.Decode(fi)
+	if err != nil {
+		return
+	}
+
+	// 恢复到最稳定且美观的 goqrcode 渲染方式，使用 Low 级别以尽量减小体积
+	qr, err := goqrcode.New(qrmatrix.Content, goqrcode.Low)
+	if err != nil {
+		return
+	}
+	// 默认包含白边（Quiet Zone），呈现出你喜欢的“白色小卡片”视觉效果
+	// 使用 Println 确保二维码打印完后换行，使后续日志内容从新行开始
+	fmt.Println(strings.TrimRight(qr.ToSmallString(false), "\n"))
 }
 
 func (q *LoginHandler) generatePtqrtoken(qrsig string) string {

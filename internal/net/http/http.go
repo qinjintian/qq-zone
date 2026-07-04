@@ -37,7 +37,7 @@ type Client struct {
 func NewClient() *Client {
 	return &Client{
 		resty: resty.New().
-			SetTimeout(30 * time.Second).
+			SetTimeout(60 * time.Second).
 			SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true}).
 			SetRetryCount(3).
 			SetRetryWaitTime(2 * time.Second).
