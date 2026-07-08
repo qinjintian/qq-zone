@@ -40,27 +40,42 @@ type Client struct {
 	APILogger *zap.SugaredLogger
 }
 
-// NewClient creates a new Qzone client after login
+// NewClient creates a new Qzone client (tries session first, then QR login)
 func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
-	// 1. 尝试从本地加载 Session
-	if sess, err := LoadSession(); err == nil {
-		apiLogger, _ := logFact.CreateAPILogger(sess.QQ)
-		c := &Client{
-			QQ:        sess.QQ,
-			Nickname:  sess.Nickname,
-			GTK:       sess.GTK,
-			Cookie:    sess.Cookie,
-			Http:      httpClient,
-			APILogger: apiLogger,
-		}
-		// 校验 Session 是否有效
-		if _, err := c.GetAlbumList(ctx, sess.QQ); err == nil {
+	// 1. 尝试从本地加载最近使用的 Session
+	if sess, err := GetLastSession(); err == nil && sess != nil {
+		c, err := NewClientWithSession(ctx, sess, httpClient, logFact)
+		if err == nil {
 			return c, nil
 		}
-		_ = ClearSession() // Session 失效，清理掉
 	}
+	// 2. 无效或不存在，执行新登录
+	return NewClientWithQR(ctx, httpClient, logFact)
+}
 
-	// 2. 本地无有效 Session，执行扫码登录
+// NewClientWithSession creates a client from a session and validates it
+func NewClientWithSession(ctx context.Context, sess *Session, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
+	apiLogger, _ := logFact.CreateAPILogger(sess.QQ)
+	c := &Client{
+		QQ:        sess.QQ,
+		Nickname:  sess.Nickname,
+		GTK:       sess.GTK,
+		Cookie:    sess.Cookie,
+		Http:      httpClient,
+		APILogger: apiLogger,
+	}
+	// 校验 Session 是否有效
+	if _, err := c.GetAlbumList(ctx, sess.QQ); err != nil {
+		_ = RemoveSession(sess.QQ) // Session 失效，清理掉该账号
+		return nil, err
+	}
+	// 有效则更新最后使用时间
+	_ = SaveSession(sess)
+	return c, nil
+}
+
+// NewClientWithQR performs a fresh QR code login
+func NewClientWithQR(ctx context.Context, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
 	loginRes, err := NewLoginHandler(httpClient).Login(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("login failed: %w", err)
@@ -82,7 +97,7 @@ func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Fac
 		APILogger: apiLogger,
 	}
 
-	// 3. 登录成功，保存 Session
+	// 登录成功，保存 Session
 	_ = SaveSession(&Session{
 		QQ:       c.QQ,
 		Nickname: c.Nickname,
@@ -91,6 +106,18 @@ func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Fac
 	})
 
 	return c, nil
+}
+
+// NewClientFromSession creates a client from an existing session (no validation)
+func NewClientFromSession(sess *Session, httpClient *http.Client, apiLogger *zap.SugaredLogger) *Client {
+	return &Client{
+		QQ:        sess.QQ,
+		Nickname:  sess.Nickname,
+		GTK:       sess.GTK,
+		Cookie:    sess.Cookie,
+		Http:      httpClient,
+		APILogger: apiLogger,
+	}
 }
 
 // logAPI logs the details of an API request and response
