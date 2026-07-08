@@ -20,6 +20,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/qinjintian/qq-zone/internal/app"
 	"github.com/qinjintian/qq-zone/internal/cli"
 	"github.com/qinjintian/qq-zone/internal/net/http"
 	"github.com/qinjintian/qq-zone/internal/pkg/logger"
@@ -31,6 +32,7 @@ func main() {
 	app := fx.New(
 		// Provide all services
 		fx.Provide(
+			app.NewDefaultConfig,
 			http.NewClient,
 			func() *logger.Factory {
 				return logger.NewFactory(filepath.Join("storage", "logs"))

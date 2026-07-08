@@ -24,37 +24,54 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/qinjintian/qq-zone/internal/pkg/util"
 	"github.com/qinjintian/qq-zone/internal/qzone"
 	"github.com/tidwall/gjson"
+	"github.com/vbauerster/mpb/v8"
+	"github.com/vbauerster/mpb/v8/decor"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
+type FailedItem struct {
+	Album string
+	Name  string
+	Error string
+}
+
 type DownloadResult struct {
-	Total      uint64
-	Success    uint64
-	NewAdded   uint64
-	Skipped    uint64
-	Failed     uint64
-	VideoCount uint64
-	ImageCount uint64
+	Total       uint64
+	Success     uint64
+	NewAdded    uint64
+	Skipped     uint64
+	Failed      uint64
+	VideoCount  uint64
+	ImageCount  uint64
+	FailedItems []FailedItem
+	mu          sync.Mutex
+}
+
+func (r *DownloadResult) addFailedItem(item FailedItem) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.FailedItems = append(r.FailedItems, item)
+	atomic.AddUint64(&r.Failed, 1)
 }
 
 type Spider struct {
 	client    *qzone.Client
 	whitelist map[string]bool
-	taskLimit int
+	config    *Config
 	logger    *zap.SugaredLogger
 
 	results DownloadResult
-	mu      sync.Mutex
 }
 
-func NewSpider(client *qzone.Client, taskLimit int, albums []string, logger *zap.SugaredLogger) *Spider {
+func NewSpider(client *qzone.Client, config *Config, albums []string, logger *zap.SugaredLogger) *Spider {
 	wl := make(map[string]bool)
 	for _, a := range albums {
 		wl[a] = true
@@ -62,15 +79,15 @@ func NewSpider(client *qzone.Client, taskLimit int, albums []string, logger *zap
 	return &Spider{
 		client:    client,
 		whitelist: wl,
-		taskLimit: taskLimit,
+		config:    config,
 		logger:    logger,
 	}
 }
 
-func (s *Spider) Download(targetUin string, exclude bool) (*DownloadResult, error) {
+func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
-	albums, err := s.client.GetAlbumList(targetUin)
+	albums, err := s.client.GetAlbumList(ctx, targetUin)
 	if err != nil {
 		return nil, err
 	}
@@ -94,16 +111,21 @@ func (s *Spider) Download(targetUin string, exclude bool) (*DownloadResult, erro
 		filteredAlbums = append(filteredAlbums, album)
 	}
 
+	// 初始化 mpb
+	p := mpb.NewWithContext(ctx)
+
 	for i, album := range filteredAlbums {
-		if err := s.downloadAlbum(targetUin, album, i+1, len(filteredAlbums), exclude); err != nil {
+		if err := s.downloadAlbum(ctx, p, targetUin, album, i+1, len(filteredAlbums), exclude); err != nil {
 			s.logger.Errorf("failed to download album [%s]: %v", album.Get("name").String(), err)
 		}
 	}
 
+	p.Wait()
+
 	return &s.results, nil
 }
 
-func (s *Spider) downloadAlbum(targetUin string, album gjson.Result, albumIdx, albumTotal int, exclude bool) error {
+func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin string, album gjson.Result, albumIdx, albumTotal int, exclude bool) error {
 	albumName := album.Get("name").String()
 	albumID := album.Get("id").String()
 
@@ -116,14 +138,31 @@ func (s *Spider) downloadAlbum(targetUin string, album gjson.Result, albumIdx, a
 		_ = os.MkdirAll(albumPath, os.ModePerm)
 	}
 
-	photos, err := s.client.GetPhotoList(targetUin, albumID)
+	// 导出相册元数据
+	if s.config.EnableMetadataExport {
+		metaPath := filepath.Join(albumPath, "album_metadata.json")
+		_ = os.WriteFile(metaPath, []byte(album.Raw), 0644)
+	}
+
+	photos, err := s.client.GetPhotoList(ctx, targetUin, albumID)
 	if err != nil {
 		return err
 	}
 
-	s.mu.Lock()
-	s.results.Total += uint64(len(photos))
-	s.mu.Unlock()
+	atomic.AddUint64(&s.results.Total, uint64(len(photos)))
+
+	// 为当前相册创建一个总进度条
+	albumBar := p.AddBar(int64(len(photos)),
+		mpb.PrependDecorators(
+			decor.Name(fmt.Sprintf("Album [%s] ", albumName), decor.WC{W: 20, C: decor.DindentRight}),
+			decor.CountersNoUnit("%d / %d"),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(),
+			decor.Name(" ] "),
+			decor.OnComplete(decor.Name("Done!", decor.WC{W: 5}), "Completed"),
+		),
+	)
 
 	localFiles := make(map[string]string)
 	if exclude {
@@ -140,20 +179,21 @@ func (s *Spider) downloadAlbum(targetUin string, album gjson.Result, albumIdx, a
 		_ = os.MkdirAll(albumPath, os.ModePerm)
 	}
 
-	g, ctx := errgroup.WithContext(context.Background())
-	g.SetLimit(s.taskLimit)
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(s.config.TaskLimit)
 
 	for i, photo := range photos {
 		i, photo := i, photo
 		g.Go(func() error {
-			return s.downloadItem(ctx, targetUin, i+1, photo, album, albumIdx, albumTotal, albumPath, len(photos), exclude, localFiles)
+			defer albumBar.Increment()
+			return s.downloadItem(gCtx, p, targetUin, i+1, photo, album, albumIdx, albumTotal, albumPath, len(photos), exclude, localFiles)
 		})
 	}
 
 	return g.Wait()
 }
 
-func (s *Spider) downloadItem(ctx context.Context, targetUin string, idx int, photo, album gjson.Result, albumIdx, albumTotal int, albumPath string, total int, exclude bool, localFiles map[string]string) error {
+func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin string, idx int, photo, album gjson.Result, albumIdx, albumTotal int, albumPath string, total int, exclude bool, localFiles map[string]string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -179,156 +219,199 @@ func (s *Spider) downloadItem(ctx context.Context, targetUin string, idx int, ph
 		uploadTime := photo.Get("uploadtime").String()
 		t, _ = time.ParseInLocation("2006-01-02 15:04:05", uploadTime, loc)
 	}
-	shootDate := t.Format("20060102150405")
 
-	var source, filename string
+	shootDate := ""
+	if !t.IsZero() {
+		shootDate = t.Format("20060102150405")
+	}
+
+	filenameDate := shootDate
+	if filenameDate == "" {
+		filenameDate = "00000000000000"
+	}
+
+	var tasks []struct {
+		url      string
+		filename string
+		isVideo  bool
+	}
+
 	isVideo := photo.Get("is_video").Bool()
 	picrefer := photo.Get("picrefer").Int()
-	// 实况图特征：是视频类型，且 picrefer 为 0
 	isLivePhoto := isVideo && picrefer == 0
 
-	// 1. 优先处理视频逻辑 (正规视频 和 实况图的视频部分)
+	// 1. 获取图片组件信息
+	imgSource := photo.Get("raw").String()
+	if imgSource == "" {
+		imgSource = photo.Get("origin_url").String()
+	}
+	if imgSource == "" {
+		imgSource = photo.Get("url").String()
+	}
+	if strings.Contains(imgSource, "b&bo=") {
+		imgSource = strings.Replace(imgSource, "b&bo=", "o&bo=", 1)
+	}
+
+	imgPrefix := "IMG_"
+	if isLivePhoto {
+		imgPrefix = "MVIMG_"
+	}
+	imgFilename := fmt.Sprintf("%s%s_%s_%s", imgPrefix, filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
+	ext := ".jpg"
+	if strings.Contains(imgSource, ".png") {
+		ext = ".png"
+	} else if strings.Contains(imgSource, ".gif") {
+		ext = ".gif"
+	}
+	imgFilename += ext
+
+	// 2. 获取视频组件信息 (针对 视频 和 实况图)
+	// 根据用户反馈，实况图在 QQ 空间本质上是以 MP4 格式存储的，因此将其视为视频处理
 	if isVideo {
-		videoURL, err := s.client.GetVideoDownloadURL(targetUin, album.Get("id").String(), sloc)
+		videoURL, err := s.client.GetVideoDownloadURL(ctx, targetUin, album.Get("id").String(), sloc)
 		if err == nil && videoURL != "" {
 			prefix := "VID_"
 			if isLivePhoto {
 				prefix = "MVIMG_"
 			}
-			filename = fmt.Sprintf("%s%s_%s_%s.mp4", prefix, shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
-			source = videoURL
+			vidFilename := fmt.Sprintf("%s%s_%s_%s.mp4", prefix, filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
+			tasks = append(tasks, struct {
+				url      string
+				filename string
+				isVideo  bool
+			}{videoURL, vidFilename, true})
 		} else {
+			// 如果获取视频地址失败，且不是实况图，则报错
 			if !isLivePhoto {
-				// 纯视频获取地址失败才报错
-				s.mu.Lock()
-				s.results.Failed++
-				s.mu.Unlock()
+				s.results.addFailedItem(FailedItem{
+					Album: albumName,
+					Name:  sloc,
+					Error: fmt.Sprintf("failed to get video download URL: %v", err),
+				})
 				return err
 			}
-			s.logger.Warnf("Could not get video component for Live Photo %s, falling back to image only", sloc)
+			// 如果是实况图但获取视频失败，回退到下载图片
+			tasks = append(tasks, struct {
+				url      string
+				filename string
+				isVideo  bool
+			}{imgSource, imgFilename, false})
 		}
+	} else {
+		// 3. 纯图片任务
+		tasks = append(tasks, struct {
+			url      string
+			filename string
+			isVideo  bool
+		}{imgSource, imgFilename, false})
 	}
 
-	// 2. 处理照片逻辑 (仅针对 静态图 或 视频获取失败的实况图)
-	if filename == "" {
-		source = photo.Get("raw").String()
-		if source == "" {
-			source = photo.Get("origin_url").String()
-		}
-		if source == "" {
-			source = photo.Get("url").String()
-		}
-
-		// 强制获取“原图”版本
-		if strings.Contains(source, "b&bo=") {
-			source = strings.Replace(source, "b&bo=", "o&bo=", 1)
-		}
-
-		prefix := "IMG_"
-		if isLivePhoto {
-			prefix = "MVIMG_"
-		}
-
-		filename = fmt.Sprintf("%s%s_%s_%s", prefix, shootDate[:8], shootDate[8:], util.MD5(sloc)[8:24])
-		ext := ".jpg"
-		if strings.Contains(source, ".png") {
-			ext = ".png"
-		} else if strings.Contains(source, ".gif") {
-			ext = ".gif"
-		}
-		filename += ext
-	}
-
-	isSkip := false
-	if exclude {
-		base := strings.TrimSuffix(filename, filepath.Ext(filename))
-		if p, ok := localFiles[base]; ok {
-			head, err := s.client.Http.Head(source, map[string]string{"cookie": s.client.Cookie})
-			if err == nil {
-				cLen, _ := strconv.ParseInt(head.Get("Content-Length"), 10, 64)
-				fi, _ := os.Stat(p)
-				if cLen <= fi.Size() {
-					isSkip = true
-				} else {
-					_ = os.Remove(p)
+	for _, task := range tasks {
+		isSkip := false
+		if exclude {
+			base := strings.TrimSuffix(task.filename, filepath.Ext(task.filename))
+			if p, ok := localFiles[base]; ok {
+				head, err := s.client.Http.Head(ctx, task.url, map[string]string{"cookie": s.client.Cookie})
+				if err == nil {
+					cLen, _ := strconv.ParseInt(head.Get("Content-Length"), 10, 64)
+					fi, _ := os.Stat(p)
+					if cLen <= fi.Size() {
+						isSkip = true
+					} else {
+						_ = os.Remove(p)
+					}
 				}
 			}
 		}
-	}
 
-	if !isSkip {
-		target := filepath.Join(albumPath, filename)
-		headers := map[string]string{
-			"cookie":     s.client.Cookie,
-			"user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36",
+		if !isSkip {
+			savePath := albumPath
+			if s.config.EnableTimeline && shootDate != "" {
+				year := shootDate[:4]
+				month := shootDate[4:6]
+				savePath = filepath.Join(albumPath, year, month)
+				_ = os.MkdirAll(savePath, os.ModePerm)
+			}
+
+			target := filepath.Join(savePath, task.filename)
+			headers := map[string]string{
+				"cookie":     s.client.Cookie,
+				"user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/78.0.3904.108 Safari/537.36",
+			}
+
+			if task.isVideo {
+				headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
+			}
+
+			_, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 60, p, task.filename, originalName)
+			// 如果是视频且下载失败（可能是因为 f0 链接 404），尝试使用原始链接重试一次
+			if err != nil && task.isVideo && strings.Contains(task.url, ".f0.mp4") {
+				originalURL := strings.Replace(task.url, ".f0.mp4", ".f20.mp4", 1)
+				_, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 60, p, task.filename, originalName)
+			}
+
+			if err != nil {
+				s.results.addFailedItem(FailedItem{
+					Album: albumName,
+					Name:  task.filename,
+					Error: fmt.Sprintf("download failed: %v", err),
+				})
+				// 这里不直接 return，尝试下载该项目的其他部分（如果有）
+				continue
+			}
 		}
 
-		if isVideo {
-			headers["Range"] = "bytes=0-"
-			headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
+		s.updateResults(isSkip, task.isVideo)
+
+		// 只在调试模式下输出详细日志
+		if s.logger.Level().Enabled(zap.DebugLevel) {
+			// 获取文件大小
+			fileSizeStr := "未知"
+			finalSavePath := albumPath
+			if s.config.EnableTimeline && shootDate != "" {
+				finalSavePath = filepath.Join(albumPath, shootDate[:4], shootDate[4:6])
+			}
+			actualTarget := filepath.Join(finalSavePath, task.filename)
+			if fi, err := os.Stat(actualTarget); err == nil {
+				fileSizeStr = util.FormatBytes(fi.Size())
+			}
+
+			blue := color.New(color.FgCyan).SprintFunc()
+			green := color.New(color.FgGreen).SprintFunc()
+			yellow := color.New(color.FgYellow).SprintFunc()
+			gray := color.New(color.FgWhite, color.Faint).SprintFunc()
+			bold := color.New(color.Bold).SprintFunc()
+
+			status := green("SUCCESS")
+			if isSkip {
+				status = yellow("SKIPPED")
+			}
+
+			output := fmt.Sprintf("[%s] %s %s -> %s (%s)",
+				gray(time.Now().Format("15:04:05")),
+				bold(status),
+				blue(originalName),
+				yellow(task.filename),
+				green(fileSizeStr),
+			)
+			s.logger.Debug(output)
 		}
-
-		_, err := s.client.Http.Download(source, target, headers, 3, 60, false)
-		if err != nil {
-			s.mu.Lock()
-			s.results.Failed++
-			s.mu.Unlock()
-			return err
-		}
 	}
-
-	s.updateResults(isSkip, isVideo)
-
-	// 获取文件大小
-	fileSizeStr := "未知"
-	if fi, err := os.Stat(filepath.Join(albumPath, filename)); err == nil {
-		fileSizeStr = util.FormatBytes(fi.Size())
-	}
-
-	// 使用颜色和卡片式布局美化输出
-	blue := color.New(color.FgCyan).SprintFunc()
-	green := color.New(color.FgGreen).SprintFunc()
-	yellow := color.New(color.FgYellow).SprintFunc()
-	gray := color.New(color.FgWhite, color.Faint).SprintFunc()
-	bold := color.New(color.Bold).SprintFunc()
-
-	status := green("SUCCESS")
-	if isSkip {
-		status = yellow("SKIPPED")
-	}
-
-	output := fmt.Sprintf("\n%s %s [%d/%d] 相册 %s 第 %d 个文件下载完成\n",
-		gray(time.Now().Format("15:04:05")),
-		bold(status),
-		albumIdx, albumTotal,
-		blue("["+albumName+"]"),
-		idx,
-	)
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("├─"), "当前账号:", targetUin)
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("├─"), "完成时间:", time.Now().Format("2006/01/02 15:04:05"))
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("├─"), "原始名称:", originalName)
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("├─"), "本地名称:", yellow(filename))
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("├─"), "文件大小:", green(fileSizeStr))
-	output += fmt.Sprintf(" %s %-12s %s\n", gray("└─"), "文件地址:", gray(source))
-
-	s.logger.Info(output)
 
 	return nil
 }
 
 func (s *Spider) updateResults(isSkip, isVideo bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.results.Success++
+	atomic.AddUint64(&s.results.Success, 1)
 	if isSkip {
-		s.results.Skipped++
+		atomic.AddUint64(&s.results.Skipped, 1)
 	} else {
-		s.results.NewAdded++
+		atomic.AddUint64(&s.results.NewAdded, 1)
 	}
 	if isVideo {
-		s.results.VideoCount++
+		atomic.AddUint64(&s.results.VideoCount, 1)
 	} else {
-		s.results.ImageCount++
+		atomic.AddUint64(&s.results.ImageCount, 1)
 	}
 }
 
