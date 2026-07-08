@@ -167,7 +167,7 @@ func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig
 		"cookie":     "qrsig=" + qrsig + ";",
 	}
 
-	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", url.QueryEscape("https://qzs.qq.com/qzs/v5/loginsucc.html?para=izone"), ptqrtoken, time.Now().Unix()*1000, loginSig)
+	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", url.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, time.Now().Unix()*1000, loginSig)
 	header, body, code, err := q.http.Get(ctx, apiURL, headers)
 	if err != nil {
 		return "", nil, err
@@ -236,7 +236,7 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 	// 使用自定义客户端执行请求，因为它内部已经集成了 resty，可以自动处理重定向或我们可以配置它
 	// 但原本的代码手动创建了一个 http.Client 并禁用了重定向
 	// 我们可以直接使用 resty 禁重定向的功能，或者继续使用标准库但带上 context
-	
+
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse

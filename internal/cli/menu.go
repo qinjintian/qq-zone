@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,9 @@ func NewCLI(httpClient *http.Client, config *app.Config, logFact *logger.Factory
 }
 
 func (c *CLI) Start() {
+	// 同步 Config 中的调试模式到 Factory
+	c.logFact.SetDebug(c.config.EnableDebug)
+
 	c.showBanner()
 
 	// 创建一个可以响应中断信号的 Context
@@ -95,9 +99,19 @@ func (c *CLI) Menu(ctx context.Context) {
 		default:
 		}
 
+		// 1. 确保已登录 (启动时或切换账号后)
+		// 移除自动强制登录逻辑，让用户先看到主菜单
+		// 只有当用户选择需要登录的功能时，再触发登录校验
+
+		// 2. 显示主菜单
 		var option string
+		menuMsg := "请选择您要执行的操作:"
+		if c.client != nil {
+			menuMsg = fmt.Sprintf("请选择操作 [%s (%s)]:", color.CyanString(c.client.Nickname), color.YellowString(c.client.QQ))
+		}
+
 		prompt := &survey.Select{
-			Message: color.New(color.FgCyan, color.Bold).Sprint("请选择您要执行的操作:"),
+			Message: color.New(color.FgCyan, color.Bold).Sprint(menuMsg),
 			Options: []string{
 				"🏠 下载自己的相册",
 				"👥 下载好友的相册",
@@ -142,58 +156,148 @@ func (c *CLI) Menu(ctx context.Context) {
 			os.Exit(0)
 		}
 
-		if c.client == nil {
-			if !qzone.HasSession() {
-				c.logger.Info("正在准备登录，请扫描弹出的二维码...")
-			}
-			client, err := qzone.NewClient(ctx, c.http, c.logFact)
-			if err != nil {
-				c.logger.Errorf("❌ 登录失败: %v", err)
-				continue
-			}
-			c.client = client
-			// 登录成功后，切换主日志到当前账号名下
-			if userLogger, err := c.logFact.Create(client.QQ); err == nil {
-				c.logger = userLogger
-			}
-			c.logger.Infof("✅ 登录成功: %s (%s)", color.CyanString(client.Nickname), color.YellowString(client.QQ))
-			if util.Exists(QRCodeSavePath) {
-				_ = os.Remove(QRCodeSavePath)
-			}
-		}
-
 		switch {
 		case strings.Contains(option, "下载自己的相册"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
 			c.handleSpider(ctx, c.client.QQ)
 		case strings.Contains(option, "下载好友的相册"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
 			var targetUin string
 			survey.AskOne(&survey.Input{
 				Message: color.New(color.FgCyan).Sprint("请输入目标 QQ 号:"),
 			}, &targetUin, survey.WithValidator(survey.Required))
 			c.handleSpider(ctx, targetUin)
 		case strings.Contains(option, "查看对我开放的好友"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
 			c.handleAccessList(ctx)
 		case strings.Contains(option, "开启/关闭调试模式"):
 			c.handleDebugToggle()
-		case strings.Contains(option, "切换账号 / 重新登录"):
+		case strings.Contains(option, "切换账号/重新登录"):
 			c.handleSwitchAccount()
+			// 立即触发登录校验逻辑，这样就能显示账号管理列表了
+			if err := c.ensureLogin(ctx); err != nil {
+				continue
+			}
 		}
 	}
 }
 
-func (c *CLI) handleSwitchAccount() {
-	if err := qzone.ClearSession(); err != nil {
-		c.logger.Errorf("❌ 注销失败: %v", err)
-		return
+func (c *CLI) ensureLogin(ctx context.Context) error {
+	sessions, _ := qzone.LoadSessions()
+
+	// 如果没有任何历史账号，直接进入新扫码登录流程
+	if len(sessions) == 0 {
+		return c.loginNew(ctx)
 	}
+
+	// 准备历史账号选项
+	var options []string
+	qqMap := make(map[string]string)
+
+	// 按最后使用时间排序
+	var list []*qzone.Session
+	for _, s := range sessions {
+		list = append(list, s)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].LastUsed.After(list[j].LastUsed)
+	})
+
+	for _, s := range list {
+		label := fmt.Sprintf("👤 %-15s (%s)", s.Nickname, s.QQ)
+		options = append(options, label)
+		qqMap[label] = s.QQ
+	}
+	options = append(options, "🆕 扫码登录新账号")
+	options = append(options, "🗑️ 清空所有历史账号")
+
+	var choice string
+	prompt := &survey.Select{
+		Message: "检测到历史登录记录，请选择账号:",
+		Options: options,
+	}
+
+	if err := survey.AskOne(prompt, &choice, survey.WithIcons(func(icons *survey.IconSet) {
+		icons.Question.Text = "🔑"
+		icons.SelectFocus.Text = "▶"
+	})); err != nil {
+		return err
+	}
+
+	if choice == "🆕 扫码登录新账号" {
+		return c.loginNew(ctx)
+	}
+
+	if choice == "🗑️ 清空所有历史账号" {
+		for qq := range sessions {
+			_ = qzone.RemoveSession(qq)
+		}
+		c.logger.Info("✅ 已清空所有历史账号")
+		return c.loginNew(ctx)
+	}
+
+	// 尝试加载选中的账号
+	targetQQ := qqMap[choice]
+	sess := sessions[targetQQ]
+
+	c.logger.Infof("📡 正在校验账号 [%s] 的登录状态...", sess.Nickname)
+	client, err := qzone.NewClientWithSession(ctx, sess, c.http, c.logFact)
+	if err != nil {
+		c.logger.Warnf("⚠️  账号 [%s] 登录已失效，请重新扫码", sess.Nickname)
+		return c.loginNew(ctx)
+	}
+
+	return c.setupClient(client)
+}
+
+func (c *CLI) loginNew(ctx context.Context) error {
+	c.logger.Info("正在准备登录，请扫描弹出的二维码...")
+	client, err := qzone.NewClientWithQR(ctx, c.http, c.logFact)
+	if err != nil {
+		c.logger.Errorf("❌ 登录失败: %v", err)
+		return err
+	}
+	return c.setupClient(client)
+}
+
+func (c *CLI) setupClient(client *qzone.Client) error {
+	c.client = client
+	// 登录成功后，切换主日志到当前账号名下
+	if userLogger, err := c.logFact.Create(client.QQ); err == nil {
+		c.logger = userLogger
+	}
+	c.logger.Infof("✅ 登录成功: %s (%s)", color.CyanString(client.Nickname), color.YellowString(client.QQ))
+	if util.Exists(QRCodeSavePath) {
+		_ = os.Remove(QRCodeSavePath)
+	}
+	return nil
+}
+
+func (c *CLI) handleSwitchAccount() {
 	c.client = nil
-	c.logger.Info("✅ 当前账号已注销，请选择操作以重新扫码登录")
+	c.logger.Info("🔄 已准备切换账号")
 }
 
 func (c *CLI) handleDebugToggle() {
 	current := c.logFact.IsDebug()
 	newStatus := !current
 	c.logFact.SetDebug(newStatus)
+
+	// 同步并保存配置
+	c.config.EnableDebug = newStatus
+	_ = c.config.Save()
 
 	statusStr := color.RedString("已关闭")
 	if newStatus {
@@ -283,6 +387,7 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	c.config.TaskLimit, _ = strconv.Atoi(answers.TaskLimit)
 	c.config.EnableTimeline = answers.EnableTimeline
 	c.config.EnableMetadataExport = answers.EnableMetadataExport
+	_ = c.config.Save() // 持久化备份任务配置
 	exclude := answers.Exclude
 
 	// 2. 获取相册列表
