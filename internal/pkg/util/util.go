@@ -19,6 +19,7 @@ package util
 import (
 	"crypto/md5"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -28,6 +29,22 @@ import (
 // MD5 returns MD5 hash of string
 func MD5(s string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
+}
+
+// FileMD5 returns MD5 hash of file
+func FileMD5(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // RandInt returns a random integer between min and max
@@ -69,16 +86,21 @@ func ListFiles(dirPath string) ([]string, error) {
 	return files, err
 }
 
-// FormatBytes formats bytes to human readable string
+// FormatBytes formats bytes to human readable string (using binary prefixes)
 func FormatBytes(bytes int64) string {
-	if bytes >= 1073741824 {
-		return fmt.Sprintf("%.2f GB", float64(bytes)/1073741824)
+	const (
+		KiB = 1024
+		MiB = KiB * 1024
+		GiB = MiB * 1024
+	)
+	if bytes >= GiB {
+		return fmt.Sprintf("%.2f GiB", float64(bytes)/GiB)
 	}
-	if bytes >= 1048576 {
-		return fmt.Sprintf("%.2f MB", float64(bytes)/1048576)
+	if bytes >= MiB {
+		return fmt.Sprintf("%.2f MiB", float64(bytes)/MiB)
 	}
-	if bytes >= 1024 {
-		return fmt.Sprintf("%.2f KB", float64(bytes)/1024)
+	if bytes >= KiB {
+		return fmt.Sprintf("%.2f KiB", float64(bytes)/KiB)
 	}
-	return fmt.Sprintf("%d bytes", bytes)
+	return fmt.Sprintf("%d B", bytes)
 }

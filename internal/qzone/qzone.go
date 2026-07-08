@@ -17,6 +17,7 @@
 package qzone
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -51,15 +52,15 @@ func NewLoginHandler(httpClient *ihttp.Client) *LoginHandler {
 }
 
 // Login performs the QR code login flow
-func (q *LoginHandler) Login() (map[string]string, error) {
-	r, err := q.loopUntilLogin()
+func (q *LoginHandler) Login(ctx context.Context) (map[string]string, error) {
+	r, err := q.loopUntilLogin(ctx)
 	// 无论登录成功还是失败，都清理掉根目录下的二维码图片
 	_ = os.Remove(QRCodeSavePath)
 	if err != nil {
 		return nil, err
 	}
 
-	identity, err := q.getCredentials(r["redirect"], r["cookies"])
+	identity, err := q.getCredentials(ctx, r["redirect"], r["cookies"])
 	if err != nil {
 		return nil, err
 	}
@@ -71,14 +72,14 @@ func (q *LoginHandler) Login() (map[string]string, error) {
 	}, nil
 }
 
-func (q *LoginHandler) loopUntilLogin() (map[string]string, error) {
+func (q *LoginHandler) loopUntilLogin(ctx context.Context) (map[string]string, error) {
 StartLoop:
-	loginSig, err := q.getLoginSig()
+	loginSig, err := q.getLoginSig(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	header, err := q.downloadQRCode()
+	header, err := q.downloadQRCode(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -98,10 +99,14 @@ StartLoop:
 
 	for {
 		if isFirstLoop {
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
 		}
 
-		str, header, err := q.checkLoginStatus(ptqrtoken, loginSig, qrsig)
+		str, header, err := q.checkLoginStatus(ctx, ptqrtoken, loginSig, qrsig)
 		if err != nil {
 			return nil, err
 		}
@@ -156,14 +161,14 @@ StartLoop:
 	}
 }
 
-func (q *LoginHandler) checkLoginStatus(ptqrtoken, loginSig, qrsig string) (string, http.Header, error) {
+func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig, qrsig string) (string, http.Header, error) {
 	headers := map[string]string{
 		"user-agent": UserAgent,
 		"cookie":     "qrsig=" + qrsig + ";",
 	}
 
-	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", url.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, time.Now().Unix()*1000, loginSig)
-	header, body, code, err := q.http.Get(apiURL, headers)
+	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", url.QueryEscape("https://qzs.qq.com/qzs/v5/loginsucc.html?para=izone"), ptqrtoken, time.Now().Unix()*1000, loginSig)
+	header, body, code, err := q.http.Get(ctx, apiURL, headers)
 	if err != nil {
 		return "", nil, err
 	}
@@ -173,13 +178,15 @@ func (q *LoginHandler) checkLoginStatus(ptqrtoken, loginSig, qrsig string) (stri
 	return string(body), header, nil
 }
 
-func (q *LoginHandler) downloadQRCode() (http.Header, error) {
+func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) {
 	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=%f&daid=5&pt_3rd_aid=0", rand.Float64())
-	resp, err := http.Get(apiURL)
+	header, body, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	if code != 200 {
+		return nil, fmt.Errorf("download qrcode failed with status: %d", code)
+	}
 
 	file, err := os.Create(QRCodeSavePath)
 	if err != nil {
@@ -187,23 +194,25 @@ func (q *LoginHandler) downloadQRCode() (http.Header, error) {
 	}
 	defer file.Close()
 
-	if _, err = io.Copy(file, resp.Body); err != nil {
+	if _, err = io.Copy(file, strings.NewReader(string(body))); err != nil {
 		return nil, err
 	}
 
-	return resp.Header, nil
+	return header, nil
 }
 
-func (q *LoginHandler) getLoginSig() (string, error) {
+func (q *LoginHandler) getLoginSig(ctx context.Context) (string, error) {
 	apiURL := "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?proxy_url=https://qzs.qq.com/qzone/v6/portal/proxy.html&daid=5&&hide_title_bar=1&low_login=0&qlogin_auto_login=1&no_verifyimg=1&link_target=blank&appid=549000912&style=22&target=self&s_url=https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone&pt_qr_app=手机QQ空间&pt_qr_link=https://z.qzone.com/download.html&self_regurl=https://qzs.qq.com/qzone/v6/reg/index.html&pt_qr_help_link=https://z.qzone.com/download.html&pt_no_auth=0"
-	resp, err := http.Get(apiURL)
+	header, _, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	if code != 200 {
+		return "", fmt.Errorf("get login sig failed with status: %d", code)
+	}
 
 	var loginSig string
-	for _, cookie := range resp.Header.Values("Set-Cookie") {
+	for _, cookie := range header.Values("Set-Cookie") {
 		if sig := extractCookieValue(cookie, "pt_login_sig"); sig != "" {
 			loginSig = sig
 			break
@@ -216,20 +225,30 @@ func (q *LoginHandler) getLoginSig() (string, error) {
 	return loginSig, nil
 }
 
-func (q *LoginHandler) getCredentials(redirectURL string, initialCookies string) (map[string]string, error) {
+func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, initialCookies string) (map[string]string, error) {
+	headers := map[string]string{
+		"User-Agent": UserAgent,
+	}
+	if initialCookies != "" {
+		headers["Cookie"] = initialCookies
+	}
+
+	// 使用自定义客户端执行请求，因为它内部已经集成了 resty，可以自动处理重定向或我们可以配置它
+	// 但原本的代码手动创建了一个 http.Client 并禁用了重定向
+	// 我们可以直接使用 resty 禁重定向的功能，或者继续使用标准库但带上 context
+	
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	req, err := http.NewRequest("GET", redirectURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", redirectURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", UserAgent)
-	if initialCookies != "" {
-		req.Header.Set("Cookie", initialCookies)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := client.Do(req)

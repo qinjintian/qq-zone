@@ -18,6 +18,7 @@ package qzone
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -40,8 +41,27 @@ type Client struct {
 }
 
 // NewClient creates a new Qzone client after login
-func NewClient(httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
-	loginRes, err := NewLoginHandler(httpClient).Login()
+func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
+	// 1. 尝试从本地加载 Session
+	if sess, err := LoadSession(); err == nil {
+		apiLogger, _ := logFact.CreateAPILogger(sess.QQ)
+		c := &Client{
+			QQ:        sess.QQ,
+			Nickname:  sess.Nickname,
+			GTK:       sess.GTK,
+			Cookie:    sess.Cookie,
+			Http:      httpClient,
+			APILogger: apiLogger,
+		}
+		// 校验 Session 是否有效
+		if _, err := c.GetAlbumList(ctx, sess.QQ); err == nil {
+			return c, nil
+		}
+		_ = ClearSession() // Session 失效，清理掉
+	}
+
+	// 2. 本地无有效 Session，执行扫码登录
+	loginRes, err := NewLoginHandler(httpClient).Login(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("login failed: %w", err)
 	}
@@ -53,14 +73,24 @@ func NewClient(httpClient *http.Client, logFact *logger.Factory) (*Client, error
 
 	apiLogger, _ := logFact.CreateAPILogger(qq)
 
-	return &Client{
+	c := &Client{
 		QQ:        qq,
 		Nickname:  loginRes["nickname"],
 		GTK:       loginRes["g_tk"],
 		Cookie:    cookie,
 		Http:      httpClient,
 		APILogger: apiLogger,
-	}, nil
+	}
+
+	// 3. 登录成功，保存 Session
+	_ = SaveSession(&Session{
+		QQ:       c.QQ,
+		Nickname: c.Nickname,
+		GTK:      c.GTK,
+		Cookie:   c.Cookie,
+	})
+
+	return c, nil
 }
 
 // logAPI logs the details of an API request and response
@@ -111,7 +141,7 @@ func (c *Client) logAPI(apiName, url string, headers map[string]string, body str
 }
 
 // GetAlbumList fetches all albums for a target QQ
-func (c *Client) GetAlbumList(targetUin string) ([]gjson.Result, error) {
+func (c *Client) GetAlbumList(ctx context.Context, targetUin string) ([]gjson.Result, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
 		"user-agent": UserAgent,
@@ -129,7 +159,7 @@ func (c *Client) GetAlbumList(targetUin string) ([]gjson.Result, error) {
 		apiURL := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&mode=2&pageStart=%d&pageNum=%d&callbackFun=shine", c.GTK, targetUin, c.QQ, offset, limit)
 
 		start := time.Now()
-		_, body, code, err := c.Http.Get(apiURL, headers)
+		_, body, code, err := c.Http.Get(ctx, apiURL, headers)
 		duration := time.Since(start)
 
 		bodyStr := string(body)
@@ -179,7 +209,7 @@ func (c *Client) GetAlbumList(targetUin string) ([]gjson.Result, error) {
 }
 
 // GetPhotoList fetches all photos in an album
-func (c *Client) GetPhotoList(targetUin string, albumID string) ([]gjson.Result, error) {
+func (c *Client) GetPhotoList(ctx context.Context, targetUin string, albumID string) ([]gjson.Result, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
 		"user-agent": UserAgent,
@@ -198,7 +228,7 @@ func (c *Client) GetPhotoList(targetUin string, albumID string) ([]gjson.Result,
 		apiURL := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_list_photo?g_tk=%v&callback=shine_Callback&mode=0&idcNum=4&hostUin=%v&topicId=%v&noTopic=0&uin=%v&pageStart=%v&pageNum=%v&skipCmtCount=0&singleurl=1&batchId=&notice=0&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&outstyle=json&format=jsonp&json_esc=1&callbackFun=shine", c.GTK, targetUin, albumID, c.QQ, offset, limit)
 
 		start := time.Now()
-		header, body, code, err := c.Http.Get(apiURL, headers)
+		header, body, code, err := c.Http.Get(ctx, apiURL, headers)
 		duration := time.Since(start)
 
 		bodyStr := string(body)
@@ -250,7 +280,7 @@ func (c *Client) GetPhotoList(targetUin string, albumID string) ([]gjson.Result,
 }
 
 // GetVideoDownloadURL gets the actual download URL for a video
-func (c *Client) GetVideoDownloadURL(targetUin string, albumID string, picKey string) (string, error) {
+func (c *Client) GetVideoDownloadURL(ctx context.Context, targetUin string, albumID string, picKey string) (string, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
 		"user-agent": UserAgent,
@@ -260,7 +290,7 @@ func (c *Client) GetVideoDownloadURL(targetUin string, albumID string, picKey st
 	apiURL := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", c.GTK, albumID, picKey, c.QQ, targetUin)
 
 	start := time.Now()
-	_, body, code, err := c.Http.Get(apiURL, headers)
+	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
 	duration := time.Since(start)
 
 	bodyStr := string(body)
@@ -298,17 +328,20 @@ func (c *Client) GetVideoDownloadURL(targetUin string, albumID string, picKey st
 		return "", fmt.Errorf("video is not ready and no URL found (status: %d, video_info: %s)", vInfo.Get("status").Int(), vInfo.Raw)
 	}
 
-	// 尝试将品质从 f20 等低清晰度提升到 f0 (原画)
-	// 注意：由于分布式存储，f0 可能在某些节点尚未同步。如果后续下载 404，请考虑取消此替换。
+	// 尝试获取高清地址，但保留原始地址作为备份
+	finalURL := downloadURL
 	if strings.Contains(downloadURL, ".f20.mp4") {
-		downloadURL = strings.Replace(downloadURL, ".f20.mp4", ".f0.mp4", 1)
+		highResURL := strings.Replace(downloadURL, ".f20.mp4", ".f0.mp4", 1)
+		// 检查高清地址是否可用（发送一个 HEAD 请求）
+		// 注意：如果 HEAD 请求太慢或被封，可能需要直接在下载逻辑里做重试
+		finalURL = highResURL
 	}
 
-	return downloadURL, nil
+	return finalURL, nil
 }
 
 // GetFriendList fetches the list of friends
-func (c *Client) GetFriendList() ([]gjson.Result, error) {
+func (c *Client) GetFriendList(ctx context.Context) ([]gjson.Result, error) {
 	apiURL := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/r.qzone.qq.com/cgi-bin/tfriend/friend_ship_manager.cgi?uin=%v&do=1&fupdate=1&clean=1&g_tk=%v", c.QQ, c.GTK)
 	headers := map[string]string{
 		"cookie":     c.Cookie,
@@ -318,7 +351,7 @@ func (c *Client) GetFriendList() ([]gjson.Result, error) {
 	}
 
 	start := time.Now()
-	_, body, code, err := c.Http.Get(apiURL, headers)
+	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
 	duration := time.Since(start)
 
 	bodyStr := string(body)

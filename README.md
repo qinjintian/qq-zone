@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Architecture-Standard%20Go-blueviolet?style=for-the-badge" alt="Architecture">
   <img src="https://img.shields.io/badge/Author-qinjintian-orange?style=for-the-badge" alt="Author">
@@ -25,14 +25,15 @@
 
 ## ✨ 核心特性
 
-- � **原图无损下载**：支持获取相册原始分辨率图片，**完整保留 EXIF 元信息**（拍摄时间、地点、设备等），回忆不失真。
-- ��️ **极简登录**：支持 **CLI 终端直接显示二维码** 或扫描根目录下生成的 `qrcode.png`，手机 QQ 扫码即登，彻底告别 F12 手动抓取 Cookie 的痛苦。
-- ⚡ **高性能并发**：基于 `errgroup` 的多协程并发下载引擎，榨干带宽性能，备份速度快如闪电。
-- 🎨 **精美终端 UI**：使用 `survey` 打造交互式菜单，配合卡片式进度日志，让备份过程赏心悦目。
-- 🔍 **智能扫描**：一键扫描所有对自己开放权限的好友空间，发现那些被遗忘的精彩。
-- 📥 **增量备份**：智能识别已下载文件，跳过重复内容，节省时间与空间。
-- 📊 **多维日志**：双轨日志架构（业务日志 + API 审计日志），支持动态调试开关，透明可控。
-- 🛠️ **规范化架构**：基于 `uber-go/fx` 依赖注入框架，代码结构清晰，易于扩展与维护。
+- 📸 **原图无损下载**：支持获取相册原始分辨率图片，**完整保留 EXIF 元信息**（拍摄时间、地点、设备等），回忆不失真。
+- 🎬 **实况图 (Live Photo) 全兼容**：完美支持 **MVIMG** 格式，自动识别并同时备份图片与对应的视频组件，还原动态瞬间。
+- 📱 **极简登录与持久化**：支持 **CLI 终端直接显示二维码** 扫码即登；集成 **Session 持久化**，一次登录，长期有效，告别频繁扫码。
+-  ⚡ **工业级下载引擎**：基于 `errgroup` 的多协程并发，配合 **HTTP Range 断点续传** 与 **文件完整性校验**，大文件下载稳如泰山。
+- 🎨 **大厂级 CLI 审美**：集成 `mpb` 实现动态清理式多进度条，支持 **MiB/s 实时速率** 与 **自动单位换算**，界面紧凑优雅。
+- 📁 **智能归档与整理**：支持按 **拍摄时间 (Timeline)** 自动将媒体文件按 `年/月` 归档，并可同步导出相册 **JSON 元数据**（描述、点赞等）。
+- 🔍 **智能扫描**：一键扫描所有对自己开放权限的好友空间，使用 `tablewriter` 渲染结构化权限报告。
+- 🛡️ **安全与稳健**：内置 `golang.org/x/time/rate` **令牌桶限流算法**，智能规避风控；支持全局 `Context` 优雅中断 (Ctrl+C)。
+- 🛠️ **规范化架构**：基于 `uber-go/fx` 依赖注入框架，代码遵循 **Standard Go Project Layout**，生产环境就绪。
 
 ---
 
@@ -75,11 +76,14 @@
 
 | 类别 | 选用方案 |
 | :--- | :--- |
-| **语言** | Go 1.25+ |
+| **核心语言** | Go 1.25+ (Modern Features) |
 | **依赖注入** | [uber-go/fx](https://github.com/uber-go/fx) |
-| **HTTP 客户端** | [go-resty/resty](https://github.com/go-resty/resty) |
-| **交互式菜单** | [survey](https://github.com/AlecAivazis/survey) |
-| **日志系统** | [zap](https://github.com/uber-go/zap) |
+| **进度渲染** | [vbauerster/mpb/v8](https://github.com/vbauerster/mpb) (Industrial Bars) |
+| **HTTP 客户端** | [go-resty/resty/v2](https://github.com/go-resty/resty) |
+| **交互式菜单** | [survey/v2](https://github.com/AlecAivazis/survey) |
+| **频率限制** | `golang.org/x/time/rate` (Token Bucket) |
+| **表格渲染** | [olekukonko/tablewriter](https://github.com/olekukonko/tablewriter) |
+| **日志系统** | [uber-go/zap](https://github.com/uber-go/zap) |
 | **并发控制** | `golang.org/x/sync/errgroup` |
 | **JSON 解析** | [gjson](https://github.com/tidwall/gjson) |
 
