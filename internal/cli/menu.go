@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Copyright (c) 2026 qinjintian. All rights reserved.
  *
  * No Part of this file may be reproduced, stored
@@ -103,7 +103,8 @@ func (c *CLI) Menu(ctx context.Context) {
 				"👥 下载好友的相册",
 				"🔍 查看对我开放的好友",
 				"⚙️ 开启/关闭调试模式",
-				"🚪 退出程序",
+				"🔄 切换账号/重新登录",
+				"👋 退出程序",
 			},
 			Description: func(value string, index int) string {
 				switch index {
@@ -120,6 +121,8 @@ func (c *CLI) Menu(ctx context.Context) {
 					}
 					return fmt.Sprintf("控制是否记录详细的 API 请求日志 (当前: %s)", status)
 				case 4:
+					return "注销当前登录状态，并准备扫码登录新账号"
+				case 5:
 					return "结束本次备份任务并安全退出"
 				default:
 					return ""
@@ -134,7 +137,7 @@ func (c *CLI) Menu(ctx context.Context) {
 			return
 		}
 
-		if strings.Contains(option, "退出程序") {
+		if strings.Contains(option, "👋 退出程序") {
 			color.Cyan("\n✅ 感谢使用，再见！👋")
 			os.Exit(0)
 		}
@@ -172,8 +175,19 @@ func (c *CLI) Menu(ctx context.Context) {
 			c.handleAccessList(ctx)
 		case strings.Contains(option, "开启/关闭调试模式"):
 			c.handleDebugToggle()
+		case strings.Contains(option, "切换账号 / 重新登录"):
+			c.handleSwitchAccount()
 		}
 	}
+}
+
+func (c *CLI) handleSwitchAccount() {
+	if err := qzone.ClearSession(); err != nil {
+		c.logger.Errorf("❌ 注销失败: %v", err)
+		return
+	}
+	c.client = nil
+	c.logger.Info("✅ 当前账号已注销，请选择操作以重新扫码登录")
 }
 
 func (c *CLI) handleDebugToggle() {
