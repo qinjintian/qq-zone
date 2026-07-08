@@ -50,7 +50,11 @@
 ## 🚀 快速开始
 
 ### 方式一：直接运行 (推荐)
-前往 [Releases](https://github.com/qinjintian/qq-zone/releases) 页面下载最新的 `qq-zone.exe`，双击运行即可。
+- **从 Release 下载**：前往 [Releases](https://github.com/qinjintian/qq-zone/releases) 页面下载最新的 `qq-zone.exe`。
+- **从仓库 bin 目录获取**：本仓库 `bin/` 目录下已预置各平台编译好的可执行程序，您可以直接下载对应版本：
+  - Windows: `bin/qq-zone-win.exe`
+  - Linux: `bin/qq-zone-linux`
+  - macOS: `bin/qq-zone-macos-intel` 或 `bin/qq-zone-macos-m-series`
 
 ### 方式二：源码编译
 1. **克隆仓库**
@@ -59,12 +63,21 @@
    cd qq-zone
    ```
 2. **编译项目**
-   ```bash
-   go build -o qq-zone.exe ./cmd/qq-zone
-   ```
+   - **全平台编译 (推荐)**：
+     ```powershell
+     ./scripts/build.ps1
+     ```
+     编译产物将存放在 `bin/` 目录下。
+   - **仅编译当前平台**：
+     ```bash
+     go build -o bin/qq-zone.exe ./cmd/qq-zone
+     ```
 3. **启动程序**
    ```bash
-   ./qq-zone.exe
+   ./bin/qq-zone-win.exe      # Windows (amd64)
+   ./bin/qq-zone-linux        # Linux (amd64)
+   ./bin/qq-zone-macos-intel  # macOS (Intel)
+   ./bin/qq-zone-macos-m-series # macOS (Apple Silicon)
    ```
 
 ## 📖 使用指南
