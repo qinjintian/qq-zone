@@ -1,22 +1,23 @@
-# 🚀 QQ-Zone Album Backup Tool
-
 <p align="center">
-  <h1 align="center">🚀 QQ-Zone Backup</h1>
-  <p align="center">
-    <a href="https://github.com/qinjintian/qq-zone/releases"><img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="release"></a>
-    <a href="https://golang.org/"><img src="https://img.shields.io/badge/Language-Go%201.25+-00ADD8?style=flat-square&logo=go" alt="go"></a>
-    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE"><img src="https://img.shields.io/github/license/qinjintian/qq-zone?style=flat-square&color=green" alt="license"></a>
-    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="platform">
-  </p>
+  <h1 align="center">🚀 QQ-Zone Album Backup Tool</h1>
   <p align="center"><b>一款极简、好用的 QQ 空间相册备份工具，守护您的数字回忆。</b></p>
-</p>
-
----
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/badge/Architecture-Standard%20Go-blueviolet?style=for-the-badge" alt="Architecture">
-  <img src="https://img.shields.io/badge/Author-qinjintian-orange?style=for-the-badge" alt="Author">
+  <p align="center">
+    <a href="https://github.com/qinjintian/qq-zone/releases">
+      <img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="release">
+    </a>
+    <a href="https://golang.org/">
+      <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square&logo=go" alt="Go Version">
+    </a>
+    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE">
+      <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
+    </a>
+    <a href="https://github.com/qinjintian/qq-zone">
+      <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="platform">
+    </a>
+    <a href="https://github.com/qinjintian">
+      <img src="https://img.shields.io/badge/Author-qinjintian-orange?style=flat-square" alt="Author">
+    </a>
+  </p>
 </p>
 
 ---
@@ -37,7 +38,7 @@
 - 🎬 **实况图 (Live Photo) 全兼容**：完美支持 **MVIMG** 格式，自动识别并同时备份图片与对应的视频组件，还原动态瞬间。
 - 👥 **多账号丝滑管理**：支持 **多账号登录记录** 自动保存与切换，提供历史账号列表一键登录，无需重复扫码，效率倍增。
 - 📱 **极简登录与持久化**：支持 **CLI 终端直接显示二维码** 扫码即登；集成 **Session 持久化**，一次登录，长期有效。
--  ⚡ **工业级下载引擎**：基于 `errgroup` 的多协程并发，配合 **HTTP Range 断点续传** 与 **文件完整性校验**，大文件下载稳如泰山。
+- ⚡ **工业级下载引擎**：基于 `errgroup` 的多协程并发，配合 **HTTP Range 断点续传** 与 **文件完整性校验**，大文件下载稳如泰山。
 - 🎨 **大厂级 CLI 审美**：集成 `mpb` 实现动态清理式多进度条，支持 **MiB/s 实时速率** 与 **自动单位换算**，界面紧凑优雅。
 - 📁 **智能归档与整理**：支持按 **拍摄时间 (Timeline)** 自动将媒体文件按 `年/月` 归档，并可同步导出相册 **JSON 元数据**（描述、点赞等）。
 - 🔍 **智能扫描**：一键扫描所有对自己开放权限的好友空间，使用 `tablewriter` 渲染结构化权限报告。
@@ -85,7 +86,7 @@
 
 | 类别 | 选用方案 |
 | :--- | :--- |
-| **核心语言** | Go 1.25+ (Modern Features) |
+| **核心语言** | Go 1.23+ (Modern Features) |
 | **依赖注入** | [uber-go/fx](https://github.com/uber-go/fx) |
 | **进度渲染** | [vbauerster/mpb/v8](https://github.com/vbauerster/mpb) (Industrial Bars) |
 | **HTTP 客户端** | [go-resty/resty/v2](https://github.com/go-resty/resty) |
