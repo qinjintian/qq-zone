@@ -418,19 +418,10 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 	headerColor := color.New(color.FgHiCyan, color.Bold).SprintFunc()
 	fmt.Printf("\n%s\n", headerColor("📋 权限查询结果 (共 "+strconv.Itoa(len(friends))+" 位好友)"))
 
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader([]string{"QQ号", "昵称", "相册状态"})
-	table.SetAutoWrapText(false)
-	table.SetAutoFormatHeaders(true)
-	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-	table.SetAlignment(tablewriter.ALIGN_LEFT)
-	table.SetCenterSeparator("")
-	table.SetColumnSeparator("")
-	table.SetRowSeparator("")
-	table.SetHeaderLine(false)
-	table.SetBorder(false)
-	table.SetTablePadding("\t") // Using tabs for better spacing
-	table.SetNoWhiteSpace(true)
+	// 打印表头，由于我们要流式输出，不再使用 tablewriter 缓冲
+	gray := color.New(color.FgWhite, color.Faint).SprintFunc()
+	fmt.Printf(" %-12s %-20s %s\n", gray("QQ号"), gray("昵称"), gray("相册状态"))
+	fmt.Println(gray(" ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 
 	type friendStatus struct {
 		uin  string
@@ -494,7 +485,10 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 		close(statusChan)
 	}()
 
+	// 实时渲染结果，不再等待全部完成
+	count := 0
 	for s := range statusChan {
+		count++
 		statusStr := s.info
 		if strings.Contains(s.info, "🔓") {
 			statusStr = color.GreenString(s.info)
@@ -503,8 +497,13 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 		} else {
 			statusStr = color.YellowString(s.info)
 		}
-		table.Append([]string{color.CyanString(s.uin), s.name, statusStr})
+
+		// 格式化输出一行结果，使用 PadRight 保证列对齐
+		uinStr := color.CyanString(util.PadRight(s.uin, 12))
+		nameStr := util.PadRight(s.name, 20)
+		progressStr := gray(fmt.Sprintf("[%d/%d]", count, len(friends)))
+
+		fmt.Printf(" %s %s %s %s\n", uinStr, nameStr, statusStr, progressStr)
 	}
-	table.Render()
-	fmt.Println()
+	fmt.Printf("\n%s\n", color.GreenString("✅ 扫描完成！"))
 }

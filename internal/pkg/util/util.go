@@ -104,3 +104,25 @@ func FormatBytes(bytes int64) string {
 	}
 	return fmt.Sprintf("%d B", bytes)
 }
+
+// VisualLength 返回字符串在终端显示的视觉长度（中文占 2 位）
+func VisualLength(s string) int {
+	length := 0
+	for _, r := range s {
+		if r > 127 {
+			length += 2
+		} else {
+			length++
+		}
+	}
+	return length
+}
+
+// PadRight 将字符串填充到指定的视觉长度
+func PadRight(s string, targetLen int) string {
+	currLen := VisualLength(s)
+	if currLen >= targetLen {
+		return s
+	}
+	return s + fmt.Sprintf("%*s", targetLen-currLen, "")
+}
