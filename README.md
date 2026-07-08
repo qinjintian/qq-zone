@@ -1,11 +1,19 @@
 # 🚀 QQ-Zone Album Backup Tool
 
 <p align="center">
-  <img src="https://coresg-normal.trae.ai/api/ide/v1/text_to_image?prompt=A%20sleek%20modern%20terminal%20interface%20showing%20a%20rocket%20launching%20with%20digital%20photos%20flying%20into%20a%20folder%2C%20cyberpunk%20aesthetic%2C%20high%20quality%2C%20blue%20and%20cyan%20tones&image_size=landscape_16_9" alt="Banner" width="100%">
+  <h1 align="center">🚀 QQ-Zone Backup</h1>
+  <p align="center">
+    <a href="https://github.com/qinjintian/qq-zone/releases"><img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="release"></a>
+    <a href="https://golang.org/"><img src="https://img.shields.io/badge/Language-Go%201.25+-00ADD8?style=flat-square&logo=go" alt="go"></a>
+    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE"><img src="https://img.shields.io/github/license/qinjintian/qq-zone?style=flat-square&color=green" alt="license"></a>
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="platform">
+  </p>
+  <p align="center"><b>一款极简、好用的 QQ 空间相册备份工具，守护您的数字回忆。</b></p>
 </p>
 
+---
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=for-the-badge&logo=go" alt="Go Version">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Architecture-Standard%20Go-blueviolet?style=for-the-badge" alt="Architecture">
   <img src="https://img.shields.io/badge/Author-qinjintian-orange?style=for-the-badge" alt="Author">
