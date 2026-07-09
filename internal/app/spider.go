@@ -153,6 +153,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 
 	// 为当前相册创建一个总进度条
 	albumBar := p.AddBar(int64(len(photos)),
+		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
 			decor.Name(fmt.Sprintf("Album [%s] ", albumName), decor.WC{W: 20, C: decor.DindentRight}),
 			decor.CountersNoUnit("%d / %d"),
@@ -160,7 +161,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		mpb.AppendDecorators(
 			decor.Percentage(),
 			decor.Name(" ] "),
-			decor.OnComplete(decor.Name("Done!", decor.WC{W: 5}), "Completed"),
+			decor.OnComplete(decor.Name("", decor.WC{W: 5}), "Done!"),
 		),
 	)
 
@@ -237,8 +238,6 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	}
 
 	isVideo := photo.Get("is_video").Bool()
-	picrefer := photo.Get("picrefer").Int()
-	isLivePhoto := isVideo && picrefer == 0
 
 	// 1. 获取图片组件信息
 	imgSource := photo.Get("raw").String()
@@ -253,8 +252,8 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	}
 
 	imgPrefix := "IMG_"
-	if isLivePhoto {
-		imgPrefix = "MVIMG_"
+	if isVideo {
+		imgPrefix = "VID_"
 	}
 	imgFilename := fmt.Sprintf("%s%s_%s_%s", imgPrefix, filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
 	ext := ".jpg"
@@ -270,32 +269,20 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	if isVideo {
 		videoURL, err := s.client.GetVideoDownloadURL(ctx, targetUin, album.Get("id").String(), sloc)
 		if err == nil && videoURL != "" {
-			prefix := "VID_"
-			if isLivePhoto {
-				prefix = "MVIMG_"
-			}
-			vidFilename := fmt.Sprintf("%s%s_%s_%s.mp4", prefix, filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
+			vidFilename := fmt.Sprintf("VID_%s_%s_%s.mp4", filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
 			tasks = append(tasks, struct {
 				url      string
 				filename string
 				isVideo  bool
 			}{videoURL, vidFilename, true})
 		} else {
-			// 如果获取视频地址失败，且不是实况图，则报错
-			if !isLivePhoto {
-				s.results.addFailedItem(FailedItem{
-					Album: albumName,
-					Name:  sloc,
-					Error: fmt.Sprintf("failed to get video download URL: %v", err),
-				})
-				return err
-			}
-			// 如果是实况图但获取视频失败，回退到下载图片
-			tasks = append(tasks, struct {
-				url      string
-				filename string
-				isVideo  bool
-			}{imgSource, imgFilename, false})
+			// 如果获取视频地址失败，则报错并继续
+			s.results.addFailedItem(FailedItem{
+				Album: albumName,
+				Name:  sloc,
+				Error: fmt.Sprintf("failed to get video download URL: %v", err),
+			})
+			return nil // 忽略单个视频错误，继续下载后续文件
 		}
 	} else {
 		// 3. 纯图片任务
@@ -311,15 +298,16 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		if exclude {
 			base := strings.TrimSuffix(task.filename, filepath.Ext(task.filename))
 			if p, ok := localFiles[base]; ok {
+				// 修正 task.filename 为本地已存在的实际文件名，确保 Download 能够正确识别并进行断点续传
+				task.filename = filepath.Base(p)
 				head, err := s.client.Http.Head(ctx, task.url, map[string]string{"cookie": s.client.Cookie})
 				if err == nil {
 					cLen, _ := strconv.ParseInt(head.Get("Content-Length"), 10, 64)
 					fi, _ := os.Stat(p)
 					if cLen <= fi.Size() {
 						isSkip = true
-					} else {
-						_ = os.Remove(p)
 					}
+					// 注意：此处不再 os.Remove(p)，以保留文件给 http.go 进行断点续传
 				}
 			}
 		}
@@ -343,11 +331,11 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 				headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
 			}
 
-			_, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 60, p, task.filename, originalName)
+			res, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 60, p, task.filename, originalName)
 			// 如果是视频且下载失败（可能是因为 f0 链接 404），尝试使用原始链接重试一次
 			if err != nil && task.isVideo && strings.Contains(task.url, ".f0.mp4") {
 				originalURL := strings.Replace(task.url, ".f0.mp4", ".f20.mp4", 1)
-				_, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 60, p, task.filename, originalName)
+				res, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 60, p, task.filename, originalName)
 			}
 
 			if err != nil {
@@ -358,6 +346,10 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 				})
 				// 这里不直接 return，尝试下载该项目的其他部分（如果有）
 				continue
+			} else if res != nil {
+				if finalName, ok := res["filename"].(string); ok {
+					task.filename = finalName
+				}
 			}
 		}
 
