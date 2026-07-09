@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -108,7 +109,7 @@ func (c *Client) PostForm(ctx context.Context, url string, params map[string]str
 	return resp.Body(), nil
 }
 
-func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string) (map[string]interface{}, error) {
+func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string) (res map[string]interface{}, err error) {
 	// 下载大文件时不建议加全局 QPS 限制，否则会拖慢下载速度
 	// 但如果是获取下载链接等小请求，可以考虑。这里暂时不给 Download 加 Wait
 	targetDir := filepath.Dir(target)
@@ -143,6 +144,36 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 		return nil, fmt.Errorf("download failed with status: %s", resp.Status())
 	}
 
+	// 动态判断并修正文件扩展名 (通过 Content-Type)
+	contentType := resp.Header().Get("Content-Type")
+	var newExt string
+	switch {
+	case strings.Contains(contentType, "image/jpeg"):
+		newExt = ".jpg"
+	case strings.Contains(contentType, "image/png"):
+		newExt = ".png"
+	case strings.Contains(contentType, "image/gif"):
+		newExt = ".gif"
+	case strings.Contains(contentType, "image/webp"):
+		newExt = ".webp"
+	case strings.Contains(contentType, "image/heic"):
+		newExt = ".heic"
+	case strings.Contains(contentType, "image/bmp"):
+		newExt = ".bmp"
+	case strings.Contains(contentType, "video/mp4"):
+		newExt = ".mp4"
+	}
+
+	if newExt != "" && !strings.EqualFold(filepath.Ext(target), newExt) {
+		newTarget := strings.TrimSuffix(target, filepath.Ext(target)) + newExt
+		if startBytes > 0 {
+			// 本地存在部分下载的文件，重命名以匹配新的后缀
+			_ = os.Rename(target, newTarget)
+		}
+		target = newTarget
+		name = strings.TrimSuffix(name, filepath.Ext(name)) + newExt
+	}
+
 	// 如果服务器支持 Range 或者返回 200，说明需要重新开始
 	var out *os.File
 	if resp.StatusCode() == 206 {
@@ -166,17 +197,51 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 		}
 
 		startTime := time.Now()
+		var lastSpeed string
+
 		bar := p.AddBar(contentLength,
-			mpb.BarFillerClearOnComplete(), // 完成后自动移除子进度条
+			mpb.BarRemoveOnComplete(), // 完成后自动彻底移除子进度条
 			mpb.PrependDecorators(
-				decor.Name(fmt.Sprintf("%s -> %s", originalName, name), decor.WC{W: 40, C: decor.DindentRight}),
+				// 例如：原文件: 2026-07-08 -> 保存为: IMG_20260707.jpg
+				decor.Name(fmt.Sprintf("原文件: %s -> 保存为: %s", originalName, name), decor.WC{W: 55, C: decor.DindentRight}),
 				decor.Name("  "), // 增加显式空格，防止粘连
+				// 添加说明: 已下载/总大小
+				decor.OnComplete(decor.Name("进度: "), "进度: "),
 				decor.CountersKibiByte("% .2f / % .2f"),
 			),
 			mpb.AppendDecorators(
-				decor.EwmaETA(decor.ET_STYLE_GO, 90),
-				decor.Name(" ] "),
+				decor.Name(" | 剩余: "),
 				decor.Any(func(st decor.Statistics) string {
+					if st.Completed {
+						return "0s"
+					}
+					if st.Total <= 0 {
+						return "0s"
+					}
+					elapsed := time.Since(startTime)
+					if elapsed < 100*time.Millisecond {
+						return "0s"
+					}
+					currentDownloaded := st.Current - startBytes
+					if currentDownloaded <= 0 {
+						return "0s"
+					}
+					speed := float64(currentDownloaded) / elapsed.Seconds()
+					if speed == 0 {
+						return "0s"
+					}
+					remaining := st.Total - st.Current
+					if remaining < 0 {
+						remaining = 0
+					}
+					eta := time.Duration(float64(remaining)/speed) * time.Second
+					return eta.Round(time.Second).String()
+				}, decor.WC{W: 5, C: decor.DindentRight}),
+				decor.Name(" | 速度: "),
+				decor.Any(func(st decor.Statistics) string {
+					if st.Completed && lastSpeed != "" {
+						return lastSpeed
+					}
 					elapsed := time.Since(startTime)
 					if elapsed < 100*time.Millisecond {
 						return "0 B/s"
@@ -187,7 +252,8 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 						currentDownloaded = 0
 					}
 					speed := float64(currentDownloaded) / elapsed.Seconds()
-					return util.FormatBytes(int64(speed)) + "/s"
+					lastSpeed = util.FormatBytes(int64(speed)) + "/s"
+					return lastSpeed
 				}, decor.WC{W: 15, C: decor.DindentRight}),
 			),
 		)
@@ -195,7 +261,13 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 			bar.SetCurrent(startBytes)
 		}
 		reader = bar.ProxyReader(resp.RawBody())
-		defer bar.SetTotal(-1, true) // 确保结束
+		defer func() {
+			if err != nil {
+				bar.Abort(true)
+			} else {
+				bar.SetTotal(-1, true)
+			}
+		}()
 	}
 
 	_, err = io.Copy(out, reader)
