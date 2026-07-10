@@ -82,7 +82,7 @@
 
 ## 📖 使用指南
 
-![Usage Guide](docs/assets/demo.png)
+![Usage Guide](docs/images/demo.png)
 
 1. **启动程序**：运行编译好的可执行文件。
 2. **扫码登录**：程序启动后会直接在 **CLI 终端显示二维码**，同时在项目根目录下生成 `qrcode.png`。请使用手机 QQ 扫码并确认登录。
@@ -119,10 +119,12 @@
 ```text
 .
 ├── bin/                # 编译产物 (可执行文件)
+├── build/              # 编译与构建专属配置
+│   └── windows/        # Windows 平台专属构建资源 (如 app.ico)
 ├── cmd/                # 程序入口
 │   └── qq-zone/        # 主程序入口
-├── docs/               # 项目文档及静态资源
-│   └── assets/         # 演示图及素材
+├── docs/               # 项目文档与演示资料
+│   └── images/         # 文档引用的图片 (如 demo.png)
 ├── internal/           # 私有业务逻辑
 │   ├── app/            # 核心爬虫引擎
 │   ├── cli/            # 终端交互界面

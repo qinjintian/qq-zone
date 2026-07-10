@@ -29,6 +29,20 @@ if (Test-Path $BinPath) {
 
 Write-Host "[>] Starting cross-platform build task..." -ForegroundColor Cyan
 
+# Generate Windows resource file for icon and manifest
+if (Test-Path "cmd/qq-zone/resource_windows.syso") {
+    Remove-Item -Path "cmd/qq-zone/resource_windows.syso" -Force
+}
+
+if (Test-Path "build/windows/app.ico") {
+    Write-Host "[*] Generating Windows resource file for icon..."
+    if (Test-Path "build/windows/app.manifest") {
+        go run github.com/akavel/rsrc@latest -manifest build/windows/app.manifest -ico build/windows/app.ico -o cmd/qq-zone/resource_windows.syso
+    } else {
+        go run github.com/akavel/rsrc@latest -ico build/windows/app.ico -o cmd/qq-zone/resource_windows.syso
+    }
+}
+
 # Windows (64-bit)
 Write-Host "[+] Building Windows (amd64)..."
 $env:GOOS="windows"; $env:GOARCH="amd64"; go build -ldflags="-s -w" -o (Join-Path $BinPath "qq-zone-win.exe") ./cmd/qq-zone
@@ -47,5 +61,11 @@ $env:GOOS="darwin"; $env:GOARCH="arm64"; go build -ldflags="-s -w" -o (Join-Path
 
 # Restore defaults
 $env:GOOS="windows"; $env:GOARCH="amd64"
+
+# Cleanup generated resource file
+if (Test-Path "cmd/qq-zone/resource_windows.syso") {
+    Write-Host "[*] Cleaning up temporary resource files..." -ForegroundColor Yellow
+    Remove-Item -Path "cmd/qq-zone/resource_windows.syso" -Force
+}
 
 Write-Host "[!] Build completed! Executables are in 'bin/' directory." -ForegroundColor Green
