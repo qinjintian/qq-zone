@@ -43,18 +43,22 @@ type FailedItem struct {
 	Error string
 }
 
+// DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标
+// 由于存在多协程并发写入，结构体内包含了互斥锁 (Mutex) 和原子操作 (atomic) 以保证数据一致性
 type DownloadResult struct {
-	Total       uint64
-	Success     uint64
-	NewAdded    uint64
-	Skipped     uint64
-	Failed      uint64
-	VideoCount  uint64
-	ImageCount  uint64
-	FailedItems []FailedItem
-	mu          sync.Mutex
+	Total       uint64       // 任务规划要下载的媒体文件总数
+	Success     uint64       // 成功下载落盘的文件数（包含全新下载和增量跳过）
+	NewAdded    uint64       // 本次任务中全新下载的文件数（不含跳过）
+	Skipped     uint64       // 触发增量策略被跳过的已存在文件数
+	Failed      uint64       // 发生异常导致下载失败的文件数
+	VideoCount  uint64       // 成功处理的视频文件（含实况图视频）数量
+	ImageCount  uint64       // 成功处理的静态图片数量
+	BytesDone   uint64       // 记录已下载的累积字节数，用于动态计算平均下载速度
+	FailedItems []FailedItem // 收集所有失败文件的上下文信息，用于生成最终的错误报告
+	mu          sync.Mutex   // 并发写 FailedItems 时的互斥锁
 }
 
+// addFailedItem 并发安全地将一条失败记录追加到 FailedItems 队列中，并将失败计数器原子 +1
 func (r *DownloadResult) addFailedItem(item FailedItem) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -62,6 +66,8 @@ func (r *DownloadResult) addFailedItem(item FailedItem) {
 	atomic.AddUint64(&r.Failed, 1)
 }
 
+// Spider 负责调度和执行整个相册备份的核心业务逻辑
+// 包含并发控制、断点续传、文件分类与统计等功能
 type Spider struct {
 	client    *qzone.Client
 	whitelist map[string]bool
@@ -71,6 +77,7 @@ type Spider struct {
 	results DownloadResult
 }
 
+// NewSpider 实例化一个下载爬虫
 func NewSpider(client *qzone.Client, config *Config, albums []string, logger *zap.SugaredLogger) *Spider {
 	wl := make(map[string]bool)
 	for _, a := range albums {
@@ -84,6 +91,9 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 	}
 }
 
+// Download 开始执行批量相册下载任务
+// targetUin: 目标好友 QQ 号 (或自己的 QQ 号)
+// exclude: 是否开启增量下载 (跳过本地已存在的完整文件)
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
@@ -115,6 +125,13 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	p := mpb.NewWithContext(ctx)
 
 	for i, album := range filteredAlbums {
+		select {
+		case <-ctx.Done():
+			s.logger.Warn("任务已被用户取消")
+			p.Wait()
+			return &s.results, nil
+		default:
+		}
 		if err := s.downloadAlbum(ctx, p, targetUin, album, i+1, len(filteredAlbums), exclude); err != nil {
 			s.logger.Errorf("failed to download album [%s]: %v", album.Get("name").String(), err)
 		}
@@ -125,6 +142,8 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	return &s.results, nil
 }
 
+// downloadAlbum 负责下载单个相册内的所有照片和视频
+// 内部实现了智能动态并发协程池 (Dynamic Worker Pool)
 func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin string, album gjson.Result, albumIdx, albumTotal int, exclude bool) error {
 	albumName := album.Get("name").String()
 	albumID := album.Get("id").String()
@@ -181,23 +200,93 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(s.config.TaskLimit)
 
-	for i, photo := range photos {
-		i, photo := i, photo
+	// 并发协程动态扩缩容 (Dynamic Worker Pool)
+	var active int32
+	baseLimit := int32(s.config.TaskLimit)
+	if baseLimit < 1 {
+		baseLimit = 10
+	}
+	var currentLimit int32 = baseLimit
+	var maxLimit int32 = baseLimit * 3 // 允许突发到3倍并发
+	var minLimit int32 = 1             // 最小并发数
+
+	taskCh := make(chan int, len(photos))
+	for i := range photos {
+		taskCh <- i
+	}
+	close(taskCh)
+
+	// 任务分发器
+	g.Go(func() error {
+		for i := range taskCh {
+			// 等待可用并发槽
+			for {
+				if atomic.LoadInt32(&active) < atomic.LoadInt32(&currentLimit) {
+					break
+				}
+				select {
+				case <-gCtx.Done():
+					return gCtx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+
+			atomic.AddInt32(&active, 1)
+			i := i
+			photo := photos[i]
+
+			g.Go(func() error {
+				defer atomic.AddInt32(&active, -1)
+				defer albumBar.Increment()
+				return s.downloadItem(gCtx, p, targetUin, i+1, photo, album, albumIdx, albumTotal, albumPath, len(photos), exclude, localFiles)
+			})
+		}
+		return nil
+	})
+
+	// 监控与动态扩缩容算法
+	if s.config.EnableDynamicTaskLimit {
 		g.Go(func() error {
-			defer albumBar.Increment()
-			return s.downloadItem(gCtx, p, targetUin, i+1, photo, album, albumIdx, albumTotal, albumPath, len(photos), exclude, localFiles)
+			var lastSuccess uint64
+			for {
+				select {
+				case <-gCtx.Done():
+					return nil
+				case <-time.After(2 * time.Second):
+					// 启发式网络带宽探测：
+					currSuccess := atomic.LoadUint64(&s.results.Success)
+					diff := currSuccess - lastSuccess
+					lastSuccess = currSuccess
+
+					cl := atomic.LoadInt32(&currentLimit)
+					act := atomic.LoadInt32(&active)
+
+					// 任务全部分发且执行完毕时退出监控
+					if len(taskCh) == 0 && act == 0 {
+						return nil
+					}
+
+					if diff > 0 && act >= cl && cl < maxLimit {
+						// 网络空闲且处理迅速，增加并发
+						atomic.AddInt32(&currentLimit, 1)
+					} else if diff == 0 && act >= cl && cl > minLimit {
+						// 出现拥堵或遇到大文件，减少并发以防被风控或占满带宽
+						atomic.AddInt32(&currentLimit, -1)
+					}
+				}
+			}
 		})
 	}
 
 	return g.Wait()
 }
 
+// downloadItem 负责处理单个文件 (照片/实况图/普通视频) 的分析、路径拼接、断点续传检查与下载调用
 func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin string, idx int, photo, album gjson.Result, albumIdx, albumTotal int, albumPath string, total int, exclude bool, localFiles map[string]string) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil // 优雅停机：不返回错误，避免触发 errgroup 级联取消，只跳过未开始的任务
 	default:
 	}
 
@@ -353,17 +442,25 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 			}
 		}
 
+		finalSavePath := albumPath
+		if s.config.EnableTimeline && shootDate != "" {
+			finalSavePath = filepath.Join(albumPath, shootDate[:4], shootDate[4:6])
+		}
+		actualTarget := filepath.Join(finalSavePath, task.filename)
+
+		// 修复本地相册时间线 (OS Time 注入)
+		if !t.IsZero() {
+			if err := os.Chtimes(actualTarget, t, t); err != nil {
+				s.logger.Debugf("failed to set OS time for %s: %v", actualTarget, err)
+			}
+		}
+
 		s.updateResults(isSkip, task.isVideo)
 
 		// 只在调试模式下输出详细日志
 		if s.logger.Level().Enabled(zap.DebugLevel) {
 			// 获取文件大小
 			fileSizeStr := "未知"
-			finalSavePath := albumPath
-			if s.config.EnableTimeline && shootDate != "" {
-				finalSavePath = filepath.Join(albumPath, shootDate[:4], shootDate[4:6])
-			}
-			actualTarget := filepath.Join(finalSavePath, task.filename)
 			if fi, err := os.Stat(actualTarget); err == nil {
 				fileSizeStr = util.FormatBytes(fi.Size())
 			}

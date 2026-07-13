@@ -44,6 +44,8 @@ const (
 	QRCodeSavePath = "qrcode.png"
 )
 
+// CLI 定义了命令行交互客户端
+// 封装了所有的业务模块组件及状态
 type CLI struct {
 	client  *qzone.Client
 	http    *http.Client
@@ -52,6 +54,7 @@ type CLI struct {
 	logFact *logger.Factory
 }
 
+// NewCLI 实例化一个新的命令行交互客户端
 func NewCLI(httpClient *http.Client, config *app.Config, logFact *logger.Factory, logger *zap.SugaredLogger) *CLI {
 	return &CLI{
 		http:    httpClient,
@@ -61,6 +64,8 @@ func NewCLI(httpClient *http.Client, config *app.Config, logFact *logger.Factory
 	}
 }
 
+// Start 启动 CLI 工具的核心生命周期
+// 包含信号拦截(Graceful Shutdown)、欢迎横幅展示和进入主菜单循环
 func (c *CLI) Start() {
 	// 同步 Config 中的调试模式到 Factory
 	c.logFact.SetDebug(c.config.EnableDebug)
@@ -68,12 +73,29 @@ func (c *CLI) Start() {
 	c.showBanner()
 
 	// 创建一个可以响应中断信号的 Context
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		count := 0
+		for range sigCh {
+			count++
+			if count == 1 {
+				color.Yellow("\n\n⚠️ 正在安全停止任务，等待当前正在下载的文件完成... (再次按 Ctrl+C 强制退出)\n")
+				cancel()
+			} else {
+				color.Red("\n❌ 强制退出！\n")
+				os.Exit(1)
+			}
+		}
+	}()
 
 	c.Menu(ctx)
 }
 
+// showBanner 打印启动时的 ASCII 艺术字横幅
 func (c *CLI) showBanner() {
 	cyan := color.New(color.FgCyan, color.Bold).SprintFunc()
 	gray := color.New(color.FgWhite, color.Faint).SprintFunc()
@@ -90,6 +112,7 @@ func (c *CLI) showBanner() {
 	fmt.Println(gray("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
 }
 
+// Menu 渲染主菜单并处理用户的选择分发
 func (c *CLI) Menu(ctx context.Context) {
 	for {
 		select {
@@ -194,6 +217,7 @@ func (c *CLI) Menu(ctx context.Context) {
 	}
 }
 
+// ensureLogin 验证当前客户端是否已登录，若未登录则触发账号管理/扫码流程
 func (c *CLI) ensureLogin(ctx context.Context) error {
 	sessions, _ := qzone.LoadSessions()
 
@@ -285,11 +309,13 @@ func (c *CLI) setupClient(client *qzone.Client) error {
 	return nil
 }
 
+// handleSwitchAccount 处理多账号切换及管理逻辑
 func (c *CLI) handleSwitchAccount() {
 	c.client = nil
 	c.logger.Info("🔄 已准备切换账号")
 }
 
+// handleDebugToggle 切换并持久化调试模式 (API 日志开关)
 func (c *CLI) handleDebugToggle() {
 	current := c.logFact.IsDebug()
 	newStatus := !current
@@ -313,6 +339,7 @@ func (c *CLI) handleDebugToggle() {
 	}
 }
 
+// handleSpider 配置并执行指定账号的相册批量备份任务
 func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	c.logger.Infof("🚀 正在为 [%s] 配置备份任务...", color.YellowString(targetUin))
 
@@ -328,23 +355,28 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 		{
 			Name: "TaskLimit",
 			Prompt: &survey.Input{
-				Message: "🚀 并发下载数 (1-50) [默认:10]?",
-				Default: strconv.Itoa(c.config.TaskLimit),
+				Message: "🚀 并发下载策略 (输入 'auto' 为智能动态并发，输入 1-50 为固定并发) [默认: auto]?",
+				Default: func() string {
+					if c.config.EnableDynamicTaskLimit {
+						return "auto"
+					}
+					return strconv.Itoa(c.config.TaskLimit)
+				}(),
 			},
 			Validate: func(val interface{}) error {
 				str, ok := val.(string)
 				if !ok {
 					return fmt.Errorf("无效的输入")
 				}
-				// 如果用户输入了内容（不为空），则进行数字范围校验
-				if str != "" {
-					i, err := strconv.Atoi(str)
-					if err != nil {
-						return fmt.Errorf("请输入数字")
-					}
-					if i < 1 || i > 50 {
-						return fmt.Errorf("范围必须在 1-50 之间")
-					}
+				if str == "" || strings.ToLower(str) == "auto" {
+					return nil
+				}
+				i, err := strconv.Atoi(str)
+				if err != nil {
+					return fmt.Errorf("请输入 'auto' 或 1-50 之间的数字")
+				}
+				if i < 1 || i > 50 {
+					return fmt.Errorf("范围必须在 1-50 之间")
 				}
 				return nil
 			},
@@ -384,7 +416,14 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	}
 
 	// 更新配置
-	c.config.TaskLimit, _ = strconv.Atoi(answers.TaskLimit)
+	if strings.ToLower(answers.TaskLimit) == "auto" || answers.TaskLimit == "" {
+		c.config.EnableDynamicTaskLimit = true
+		c.config.TaskLimit = 10 // 设置一个基础的底线并发
+	} else {
+		c.config.EnableDynamicTaskLimit = false
+		c.config.TaskLimit, _ = strconv.Atoi(answers.TaskLimit)
+	}
+
 	c.config.EnableTimeline = answers.EnableTimeline
 	c.config.EnableMetadataExport = answers.EnableMetadataExport
 	_ = c.config.Save() // 持久化备份任务配置
@@ -513,6 +552,8 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	}
 }
 
+// handleAccessList 查询并渲染允许当前用户访问的好友列表
+// 使用 tablewriter 实现流式表格渲染
 func (c *CLI) handleAccessList(ctx context.Context) {
 	yellow := color.New(color.FgYellow).SprintFunc()
 	c.logger.Warnf("%s 正在获取好友列表并查询访问权限...", yellow("⚠️  警告：由于好友数量较多，高频查询可能导致腾讯临时封禁您的 IP 或账号（表现为相册列表变为空），请谨慎操作。"))

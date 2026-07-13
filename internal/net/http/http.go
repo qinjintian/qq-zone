@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/go-resty/resty/v2"
 	"github.com/qinjintian/qq-zone/internal/pkg/util"
 	"github.com/vbauerster/mpb/v8"
@@ -34,11 +35,15 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Client 封装了基于 go-resty 的 HTTP 客户端
+// 包含连接池、超时控制以及全局并发限流器
 type Client struct {
 	resty   *resty.Client
 	limiter *rate.Limiter
 }
 
+// NewClient 初始化一个全局 HTTP 客户端
+// 配置了连接超时、KeepAlive 以及重试机制
 func NewClient() *Client {
 	return &Client{
 		resty: resty.New().
@@ -57,6 +62,7 @@ func (c *Client) SetRateLimit(r rate.Limit, b int) {
 	c.limiter.SetBurst(b)
 }
 
+// Get 发起一个基础的 HTTP GET 请求，受全局速率限制保护
 func (c *Client) Get(ctx context.Context, url string, headers map[string]string) (http.Header, []byte, int, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, nil, 0, err
@@ -72,6 +78,7 @@ func (c *Client) Get(ctx context.Context, url string, headers map[string]string)
 	return resp.Header(), resp.Body(), resp.StatusCode(), nil
 }
 
+// Head 发起一个 HTTP HEAD 请求，常用于获取文件大小 (Content-Length) 而不下载实体
 func (c *Client) Head(ctx context.Context, url string, headers map[string]string) (http.Header, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err
@@ -90,6 +97,7 @@ func (c *Client) Head(ctx context.Context, url string, headers map[string]string
 	return resp.Header(), nil
 }
 
+// PostForm 发起一个 HTTP POST 表单请求，用于提交数据
 func (c *Client) PostForm(ctx context.Context, url string, params map[string]string, headers map[string]string) ([]byte, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err
@@ -109,6 +117,8 @@ func (c *Client) PostForm(ctx context.Context, url string, params map[string]str
 	return resp.Body(), nil
 }
 
+// Download 执行大文件流式下载任务
+// 核心功能：断点续传 (HTTP Range)、文件后缀嗅探、指数退避风控防御、进度条渲染
 func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string) (res map[string]interface{}, err error) {
 	// 下载大文件时不建议加全局 QPS 限制，否则会拖慢下载速度
 	// 但如果是获取下载链接等小请求，可以考虑。这里暂时不给 Download 加 Wait
@@ -126,23 +136,85 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 	}
 
 	req := c.resty.R().
-		SetContext(ctx).
+		SetContext(context.WithoutCancel(ctx)).
 		SetHeaders(headers).
 		SetDoNotParseResponse(true)
 
-	if startBytes > 0 {
-		req.SetHeader("Range", fmt.Sprintf("bytes=%d-", startBytes))
+	var resp *resty.Response
+	for i := 0; i <= retry; i++ {
+		if startBytes > 0 {
+			req.SetHeader("Range", fmt.Sprintf("bytes=%d-", startBytes))
+		} else {
+			req.Header.Del("Range")
+		}
+
+		var reqErr error
+		resp, reqErr = req.Get(uri)
+		if reqErr != nil {
+			err = reqErr
+			continue
+		}
+
+		if resp.StatusCode() == 200 || resp.StatusCode() == 206 {
+			err = nil
+			break
+		}
+
+		status := resp.StatusCode()
+		resp.RawBody().Close()
+		err = fmt.Errorf("download failed with status: %s", resp.Status())
+
+		// 如果检测到 403/429 等可能是风控的错误，进行退避
+		if status == 403 || status == 429 || status == 503 {
+			if i < retry {
+				// 指数退避，基础等待 3 秒 (3s, 6s, 12s...)
+				sleepSec := (1 << i) * 3
+
+				if p != nil {
+					yellow := color.New(color.FgYellow).SprintFunc()
+					msg := yellow(fmt.Sprintf("[风控拦截, 暂停 %ds...] %s", sleepSec, name))
+					tempBar := p.AddBar(int64(sleepSec),
+						mpb.BarRemoveOnComplete(),
+						mpb.PrependDecorators(
+							decor.Name(msg, decor.WC{W: 55, C: decor.DindentRight}),
+						),
+						mpb.AppendDecorators(decor.CountersNoUnit("%d / %d s")),
+					)
+					for s := 0; s < sleepSec; s++ {
+						select {
+						case <-ctx.Done():
+							tempBar.Abort(true)
+							return nil, ctx.Err()
+						case <-time.After(time.Second):
+							tempBar.Increment()
+						}
+					}
+					tempBar.SetTotal(-1, true) // 完成并移除
+				} else {
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(time.Duration(sleepSec) * time.Second):
+					}
+				}
+				continue
+			}
+		} else {
+			// 普通 HTTP 错误也重试，但不加长退避
+			if i < retry {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(1 * time.Second):
+				}
+			}
+		}
 	}
 
-	resp, err := req.Get(uri)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.RawBody().Close()
-
-	if resp.StatusCode() != 200 && resp.StatusCode() != 206 {
-		return nil, fmt.Errorf("download failed with status: %s", resp.Status())
-	}
 
 	// 动态判断并修正文件扩展名 (通过 Content-Type)
 	contentType := resp.Header().Get("Content-Type")
