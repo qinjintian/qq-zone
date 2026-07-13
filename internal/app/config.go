@@ -20,23 +20,27 @@ import (
 	"path/filepath"
 )
 
-// Config defines the application configuration
+// Config 定义了应用程序的全局配置结构
+// 这些配置会被持久化到本地，以便下次启动时恢复用户的偏好设置
 type Config struct {
-	TaskLimit            int  `json:"task_limit"`             // 并发下载任务数限制
-	EnableTimeline       bool `json:"enable_timeline"`        // 是否按 年/月 整理时间轴
-	EnableMetadataExport bool `json:"enable_metadata_export"` // 是否导出相册元数据 (JSON)
-	EnableDebug          bool `json:"enable_debug"`           // 是否开启调试模式
+	TaskLimit              int  `json:"task_limit"`                // 并发下载任务数限制
+	EnableDynamicTaskLimit bool `json:"enable_dynamic_task_limit"` // 是否开启智能动态并发
+	EnableTimeline         bool `json:"enable_timeline"`           // 是否按 年/月 整理时间轴
+	EnableMetadataExport   bool `json:"enable_metadata_export"`    // 是否导出相册元数据 (JSON)
+	EnableDebug            bool `json:"enable_debug"`              // 是否开启调试模式
 }
 
 const configPath = "storage/config.json"
 
-// NewDefaultConfig returns a default configuration
+// NewDefaultConfig 返回一套默认的应用程序配置
+// 用于在初次运行或配置文件丢失时提供合理的初始化参数
 func NewDefaultConfig() *Config {
 	cfg := &Config{
-		TaskLimit:            10,   // 默认并发数为 10
-		EnableTimeline:       true, // 默认开启时间轴整理
-		EnableMetadataExport: true, // 默认开启元数据导出
-		EnableDebug:          false, // 默认关闭调试模式
+		TaskLimit:              10,    // 默认并发数为 10
+		EnableDynamicTaskLimit: true,  // 默认开启智能动态并发
+		EnableTimeline:         true,  // 默认开启时间轴整理
+		EnableMetadataExport:   true,  // 默认开启元数据导出
+		EnableDebug:            false, // 默认关闭调试模式
 	}
 
 	// 尝试从本地加载配置
@@ -47,7 +51,8 @@ func NewDefaultConfig() *Config {
 	return cfg
 }
 
-// Save persists the configuration to local storage
+// Save 将当前内存中的配置对象持久化写入到本地 JSON 文件中
+// 以便实现跨运行周期的状态记忆（如调试模式开关、默认并发数等）
 func (c *Config) Save() error {
 	dir := filepath.Dir(configPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {

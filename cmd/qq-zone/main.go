@@ -30,7 +30,7 @@ import (
 
 func main() {
 	app := fx.New(
-		// Provide all services
+		// 注入所有核心服务依赖
 		fx.Provide(
 			app.NewDefaultConfig,
 			http.NewClient,
@@ -42,12 +42,12 @@ func main() {
 			},
 			cli.NewCLI,
 		),
-		// Start the CLI
+		// 启动 CLI 交互界面
 		fx.Invoke(func(lifecycle fx.Lifecycle, c *cli.CLI, l *zap.SugaredLogger) {
 			lifecycle.Append(fx.Hook{
 				OnStart: func(ctx context.Context) error {
-					// CLI blocks the main thread, so we run it in a goroutine or just call it
-					// In a CLI tool, we usually just call Start()
+					// 因为 CLI 的交互会阻塞主线程，所以我们将其放入独立的 Goroutine 中运行
+					// 这样配合 fx 生命周期管理，可以实现平滑的启动和优雅停机
 					go c.Start()
 					return nil
 				},
@@ -57,7 +57,7 @@ func main() {
 				},
 			})
 		}),
-		// Suppress fx's own logs for a cleaner CLI experience
+		// 禁用 fx 框架自带的启动日志，以保持 CLI 终端界面的极简和清爽
 		fx.NopLogger,
 	)
 

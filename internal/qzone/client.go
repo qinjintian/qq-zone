@@ -30,17 +30,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Client handles all communication with QQ Zone API
+// Client 封装了与 QQ 空间 API 交互的客户端
+// 包含 HTTP 客户端实例、用户凭证 (Cookie/GTK) 以及日志记录器
 type Client struct {
-	QQ        string
-	Nickname  string
-	GTK       string
-	Cookie    string
-	Http      *http.Client
-	APILogger *zap.SugaredLogger
+	QQ        string             // 当前登录用户的 QQ 号码
+	Nickname  string             // 当前登录用户的昵称
+	GTK       string             // 算出的 QQ 空间 CSRF 校验 Token (g_tk)
+	Cookie    string             // 用户登录状态的 Cookie 字符串
+	Http      *http.Client       // 底层 HTTP 客户端，负责发送网络请求
+	APILogger *zap.SugaredLogger // 专门用于记录 API 请求和响应的日志记录器
 }
 
-// NewClient creates a new Qzone client (tries session first, then QR login)
+// NewClient 初始化并返回一个 QQ 空间 API 客户端实例 (优先尝试 Session，无效则扫码登录)
 func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
 	// 1. 尝试从本地加载最近使用的 Session
 	if sess, err := GetLastSession(); err == nil && sess != nil {
@@ -49,11 +50,12 @@ func NewClient(ctx context.Context, httpClient *http.Client, logFact *logger.Fac
 			return c, nil
 		}
 	}
-	// 2. 无效或不存在，执行新登录
+	// 2. 无效或不存在，执行新登录流程
 	return NewClientWithQR(ctx, httpClient, logFact)
 }
 
-// NewClientWithSession creates a client from a session and validates it
+// NewClientWithSession 从已有的 Session 实例化一个客户端实例
+// 校验 Session 是否有效，若无效则清理掉该账号的 Session
 func NewClientWithSession(ctx context.Context, sess *Session, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
 	apiLogger, _ := logFact.CreateAPILogger(sess.QQ)
 	c := &Client{
@@ -74,7 +76,8 @@ func NewClientWithSession(ctx context.Context, sess *Session, httpClient *http.C
 	return c, nil
 }
 
-// NewClientWithQR performs a fresh QR code login
+// NewClientWithQR 发起二维码登录流程
+// 它会获取登录二维码，保存到本地，轮询登录状态，最后解析凭证并初始化客户端信息
 func NewClientWithQR(ctx context.Context, httpClient *http.Client, logFact *logger.Factory) (*Client, error) {
 	loginRes, err := NewLoginHandler(httpClient).Login(ctx)
 	if err != nil {
@@ -108,7 +111,7 @@ func NewClientWithQR(ctx context.Context, httpClient *http.Client, logFact *logg
 	return c, nil
 }
 
-// NewClientFromSession creates a client from an existing session (no validation)
+// NewClientFromSession 通过已有的 Session 会话直接恢复客户端状态（不进行有效性校验）
 func NewClientFromSession(sess *Session, httpClient *http.Client, apiLogger *zap.SugaredLogger) *Client {
 	return &Client{
 		QQ:        sess.QQ,
@@ -120,7 +123,8 @@ func NewClientFromSession(sess *Session, httpClient *http.Client, apiLogger *zap
 	}
 }
 
-// logAPI logs the details of an API request and response
+// logAPI 负责统一记录底层 API 请求的调试信息
+// 包含请求的 URL、状态码以及原始的响应内容，方便在出现风控或错误时进行排查
 func (c *Client) logAPI(apiName, url string, headers map[string]string, body string, statusCode int, duration time.Duration, err error) {
 	if c.APILogger == nil {
 		return
@@ -167,7 +171,8 @@ func (c *Client) logAPI(apiName, url string, headers map[string]string, body str
 	}
 }
 
-// GetAlbumList fetches all albums for a target QQ
+// GetAlbumList 拉取指定 QQ 号的相册列表
+// 返回一个包含所有相册信息的 gjson.Result 数组
 func (c *Client) GetAlbumList(ctx context.Context, targetUin string) ([]gjson.Result, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
@@ -235,7 +240,8 @@ func (c *Client) GetAlbumList(ctx context.Context, targetUin string) ([]gjson.Re
 	return allAlbums, nil
 }
 
-// GetPhotoList fetches all photos in an album
+// GetPhotoList 分页拉取指定相册下的所有照片/视频列表
+// 由于 QQ 空间接口有分页限制，此方法会自动循环请求直到拉取完所有数据
 func (c *Client) GetPhotoList(ctx context.Context, targetUin string, albumID string) ([]gjson.Result, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
@@ -306,15 +312,16 @@ func (c *Client) GetPhotoList(ctx context.Context, targetUin string, albumID str
 	return allPhotos, nil
 }
 
-// GetVideoDownloadURL gets the actual download URL for a video
-func (c *Client) GetVideoDownloadURL(ctx context.Context, targetUin string, albumID string, picKey string) (string, error) {
+// GetVideoDownloadURL 获取指定视频或实况图的真实下载直链
+// 对于 MP4 视频或实况图，QQ 空间需要通过该专用接口获取带有 token 的真实下载地址
+func (c *Client) GetVideoDownloadURL(ctx context.Context, targetUin string, albumID string, sloc string) (string, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
 		"user-agent": UserAgent,
 		"referer":    fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin),
 	}
 
-	apiURL := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", c.GTK, albumID, picKey, c.QQ, targetUin)
+	apiURL := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", c.GTK, albumID, sloc, c.QQ, targetUin)
 
 	start := time.Now()
 	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
@@ -367,7 +374,8 @@ func (c *Client) GetVideoDownloadURL(ctx context.Context, targetUin string, albu
 	return finalURL, nil
 }
 
-// GetFriendList fetches the list of friends
+// GetFriendList 获取当前用户的所有好友列表
+// 并并发检测每个好友的空间访问权限 (是否对我开放)
 func (c *Client) GetFriendList(ctx context.Context) ([]gjson.Result, error) {
 	apiURL := fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/r.qzone.qq.com/cgi-bin/tfriend/friend_ship_manager.cgi?uin=%v&do=1&fupdate=1&clean=1&g_tk=%v", c.QQ, c.GTK)
 	headers := map[string]string{
@@ -404,8 +412,9 @@ func (c *Client) GetFriendList(ctx context.Context) ([]gjson.Result, error) {
 	return res.Get("data.items_list").Array(), nil
 }
 
-// Helper functions
-
+// Helper functions - 以下为内部辅助函数
+// parseJSONP 用于解析腾讯接口常返回的 JSONP 格式数据
+// 它会剥离外部的 callback 回调函数包装，提取并返回纯净的内部 JSON 字符串
 func parseJSONP(content string, callback string) (string, error) {
 	start := strings.Index(content, "(")
 	end := strings.LastIndex(content, ")")
@@ -415,7 +424,7 @@ func parseJSONP(content string, callback string) (string, error) {
 	return content[start+1 : end], nil
 }
 
-// GetAlbumListURL returns the URL for album list
+// GetAlbumListURL 根据给定的参数生成并返回拉取相册列表的 API URL
 func GetAlbumListURL(hostUin, uin, gtk string) string {
 	return fmt.Sprintf("https://user.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/fcg_list_album_v3?g_tk=%v&callback=shine_Callback&hostUin=%v&uin=%v&appid=4&inCharset=utf-8&outCharset=utf-8&source=qzone&plat=qzone&format=jsonp&notice=0&filter=1&handset=4&pageNumModeSort=40&pageNumModeClass=15&needUserInfo=1&idcNum=4&callbackFun=shine", gtk, hostUin, uin)
 }

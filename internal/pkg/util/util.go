@@ -26,12 +26,13 @@ import (
 	"time"
 )
 
-// MD5 returns MD5 hash of string
+// MD5 计算并返回给定字符串的 MD5 哈希摘要（十六进制字符串）
 func MD5(s string) string {
 	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
 }
 
-// FileMD5 returns MD5 hash of file
+// FileMD5 以流式读取的方式计算并返回本地文件的 MD5 哈希摘要
+// 适用于大文件校验，避免将整个文件加载到内存中
 func FileMD5(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -47,7 +48,7 @@ func FileMD5(path string) (string, error) {
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
-// RandInt returns a random integer between min and max
+// RandInt 返回一个位于 [min, max) 区间的伪随机整数
 func RandInt(min, max int) int {
 	if min >= max {
 		return min
@@ -56,13 +57,13 @@ func RandInt(min, max int) int {
 	return r.Intn(max-min) + min
 }
 
-// Exists checks if file or directory exists
+// Exists 检查指定的本地文件或目录路径是否存在
 func Exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil || os.IsExist(err)
 }
 
-// IsDir checks if path is a directory
+// IsDir 检查指定的本地路径是否存在且为一个目录
 func IsDir(path string) bool {
 	stat, err := os.Stat(path)
 	if err != nil {
@@ -71,7 +72,7 @@ func IsDir(path string) bool {
 	return stat.IsDir()
 }
 
-// ListFiles returns all files in directory recursively
+// ListFiles 递归遍历指定目录，并返回该目录下所有文件的绝对或相对路径列表
 func ListFiles(dirPath string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
@@ -86,7 +87,7 @@ func ListFiles(dirPath string) ([]string, error) {
 	return files, err
 }
 
-// FormatBytes formats bytes to human readable string (using binary prefixes)
+// FormatBytes 将字节大小转换为人类易读的格式（使用 1024 进制的 KiB/MiB/GiB 标准）
 func FormatBytes(bytes int64) string {
 	const (
 		KiB = 1024

@@ -39,19 +39,20 @@ const (
 	UserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-// LoginHandler handles the QR code login flow
+// LoginHandler 处理 QQ 空间扫码登录相关的全部交互逻辑
 type LoginHandler struct {
 	http *ihttp.Client
 }
 
-// NewLoginHandler creates a new LoginHandler
+// NewLoginHandler 初始化一个新的登录处理器
 func NewLoginHandler(httpClient *ihttp.Client) *LoginHandler {
 	return &LoginHandler{
 		http: httpClient,
 	}
 }
 
-// Login performs the QR code login flow
+// Login 执行扫码登录流程
+// 包含获取登录凭证、下载二维码、轮询扫码状态、提取并验证最终 Cookie 的全过程
 func (q *LoginHandler) Login(ctx context.Context) (map[string]string, error) {
 	r, err := q.loopUntilLogin(ctx)
 	// 无论登录成功还是失败，都清理掉根目录下的二维码图片
@@ -161,6 +162,8 @@ StartLoop:
 	}
 }
 
+// checkLoginStatus 不断向腾讯鉴权服务器查询当前二维码的状态
+// 状态码如：65(二维码失效)、66(等待扫码)、67(已扫码待确认)、0(登录成功)
 func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig, qrsig string) (string, http.Header, error) {
 	headers := map[string]string{
 		"user-agent": UserAgent,
@@ -178,6 +181,7 @@ func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig
 	return string(body), header, nil
 }
 
+// downloadQRCode 获取最新的 QQ 空间登录二维码图片流，并落盘保存
 func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) {
 	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=%f&daid=5&pt_3rd_aid=0", rand.Float64())
 	header, body, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
@@ -308,6 +312,7 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 	}, nil
 }
 
+// printQRCodeToTerminal 将下载到本地的二维码图片通过 qrcode 终端库，转换为适合在命令行显示的 ASCII 字符矩阵
 func (q *LoginHandler) printQRCodeToTerminal() {
 	fi, err := os.Open(QRCodeSavePath)
 	if err != nil {
@@ -331,6 +336,8 @@ func (q *LoginHandler) printQRCodeToTerminal() {
 	fmt.Println(strings.TrimRight(qr.ToSmallString(false), "\n"))
 }
 
+// generatePtqrtoken 基于腾讯前端的 qrsig 签名算法生成轮询用的 ptqrtoken
+// 它是腾讯 API 用于校验二维码状态合法性的核心参数
 func (q *LoginHandler) generatePtqrtoken(qrsig string) string {
 	e := 0
 	for i := 0; i < len(qrsig); i++ {
@@ -339,6 +346,8 @@ func (q *LoginHandler) generatePtqrtoken(qrsig string) string {
 	return strconv.Itoa(2147483647 & e)
 }
 
+// calculateGTK 根据用户的 p_skey 算法生成 QQ 空间专用的 CSRF 校验 Token (g_tk)
+// 这是腾讯系 API 防跨站请求伪造的核心签名算法
 func calculateGTK(pSkey string) string {
 	h := 5381
 	for i := 0; i < len(pSkey); i++ {
@@ -347,6 +356,7 @@ func calculateGTK(pSkey string) string {
 	return strconv.Itoa(h & 2147483647)
 }
 
+// extractCookieValue 从原始 Cookie 头字符串中解析提取指定 key 的值
 func extractCookieValue(header, key string) string {
 	parts := strings.Split(header, ";")
 	for _, p := range parts {

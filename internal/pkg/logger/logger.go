@@ -30,14 +30,17 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// ansiRegex is used to strip ANSI color codes from strings
+// ansiRegex 预编译了用于匹配终端 ANSI 颜色转义字符的正则表达式
+// 用于在写入日志文件前清洗掉控制台的颜色代码，保证纯文本日志的整洁
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-// plainFileWriter wraps an io.Writer and strips ANSI escape codes
+// plainFileWriter 是一个自定义的 io.Writer 包装器
+// 它的核心职责是拦截即将写入文件的日志流，并通过 ansiRegex 剔除掉所有 ANSI 颜色字符
 type plainFileWriter struct {
 	w io.Writer
 }
 
+// Write 实现了 io.Writer 接口，在此过程中利用正则去除了文本中的 ANSI 颜色代码
 func (p *plainFileWriter) Write(b []byte) (int, error) {
 	plain := ansiRegex.ReplaceAll(b, []byte(""))
 	n, err := p.w.Write(plain)
@@ -47,6 +50,8 @@ func (p *plainFileWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// Factory 负责统筹和创建所有的日志记录器实例
+// 支持内存缓冲与并发安全控制
 type Factory struct {
 	basePath string
 	buffer   *bytes.Buffer
@@ -54,6 +59,7 @@ type Factory struct {
 	debug    bool
 }
 
+// NewFactory 实例化一个日志工厂，指定日志落盘的基础目录
 func NewFactory(basePath string) *Factory {
 	return &Factory{
 		basePath: basePath,
@@ -62,22 +68,27 @@ func NewFactory(basePath string) *Factory {
 	}
 }
 
+// SetDebug 动态开启或关闭 API 级别的调试模式
 func (f *Factory) SetDebug(enabled bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.debug = enabled
 }
 
+// IsDebug 返回当前系统是否处于调试模式
 func (f *Factory) IsDebug() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.debug
 }
 
+// Create 为指定的 QQ 号生成一个常规业务日志记录器
 func (f *Factory) Create(uin string) (*zap.SugaredLogger, error) {
 	return f.createLogger(uin, false)
 }
 
+// CreateAPILogger 为指定的 QQ 号生成专用的 API 调试日志记录器
+// 如果全局调试模式未开启，它将返回一个极低开销的 Nop (无操作) 记录器
 func (f *Factory) CreateAPILogger(uin string) (*zap.SugaredLogger, error) {
 	f.mu.Lock()
 	isDebug := f.debug
@@ -90,6 +101,8 @@ func (f *Factory) CreateAPILogger(uin string) (*zap.SugaredLogger, error) {
 	return f.createLogger(uin, true)
 }
 
+// createLogger 封装了底层 zap Logger 的核心构建逻辑
+// 支持区分常规日志和 API 日志，同时配置了控制台输出和基于 plainFileWriter 的纯文本文件落盘
 func (f *Factory) createLogger(uin string, isAPI bool) (*zap.SugaredLogger, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

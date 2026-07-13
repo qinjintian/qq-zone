@@ -1,0 +1,55 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # 当推送以 v 开头的 tag 时触发 (例如 v2.2.0)
+
+jobs:
+  build:
+    name: Cross-Platform Build
+    runs-on: windows-latest # 在云端启动一台最新的 Windows 虚拟机
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # 指定 Go 版本
+
+      - name: Run Build Script
+        shell: pwsh # 使用 PowerShell Core 执行
+        run: ./scripts/build.ps1
+
+      - name: Package Assets
+        shell: pwsh
+        run: |
+          # 将 bin 目录下的文件重命名或打包（可选，这里我们直接上传）
+          Get-ChildItem -Path bin/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            bin/qq-zone-win.exe
+            bin/qq-zone-linux
+            bin/qq-zone-macos-intel
+            bin/qq-zone-macos-m-series
+          body: |
+            🚀 **QQ-Zone Album Backup Tool - New Release**
+            
+            这是由 GitHub Actions 自动构建并发布的版本。
+            
+            ### 🛠 构建信息
+            - **版本**: ${{ github.ref_name }}
+            - **日期**: ${{ github.event.head_commit.timestamp }}
+            - **Commit**: `${{ github.sha }}`
+            
+            请根据你的操作系统下载对应的二进制文件运行。
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 自动注入权限，无需手动配置

@@ -27,15 +27,16 @@ const (
 	SessionsPath   = "storage/sessions.json"
 )
 
+// Session 记录了单个账号登录状态的核心凭证与信息
 type Session struct {
-	QQ       string    `json:"qq"`
-	Nickname string    `json:"nickname"`
-	GTK      string    `json:"g_tk"`
-	Cookie   string    `json:"cookie"`
-	LastUsed time.Time `json:"last_used"`
+	QQ       string    `json:"qq"`        // 账号的唯一标识
+	Nickname string    `json:"nickname"`  // 账号的展示昵称
+	GTK      string    `json:"g_tk"`      // 根据 p_skey 算出的防跨站 CSRF 凭证
+	Cookie   string    `json:"cookie"`    // 请求 API 必须携带的持久化 Cookie 串
+	LastUsed time.Time `json:"last_used"` // 最后一次使用的时间
 }
 
-// LoadSessions loads all sessions from local storage
+// LoadSessions 从本地 session.json，返回当前存储的所有历史账号信息
 func LoadSessions() (map[string]*Session, error) {
 	sessions := make(map[string]*Session)
 
@@ -70,7 +71,8 @@ func LoadSessions() (map[string]*Session, error) {
 	return sessions, nil
 }
 
-// SaveSession saves or updates a session
+// SaveSession 将当前最新提取到的登录凭证安全地写入到本地存储文件中
+// 支持自动合并已有会话，并刷新 LastUsed 时间戳
 func SaveSession(s *Session) error {
 	sessions, _ := LoadSessions()
 	if sessions == nil {
@@ -83,7 +85,7 @@ func SaveSession(s *Session) error {
 	return saveSessionsToFile(sessions)
 }
 
-// GetLastSession returns the most recently used session
+// GetLastSession 从本地存储中提取出最新使用（或最后更新）的活跃会话
 func GetLastSession() (*Session, error) {
 	sessions, err := LoadSessions()
 	if err != nil || len(sessions) == 0 {
@@ -102,7 +104,7 @@ func GetLastSession() (*Session, error) {
 	return list[0], nil
 }
 
-// RemoveSession removes a specific account's session
+// RemoveSession 根据提供的 QQ 号，从本地持久化存储中移除指定的登录状态
 func RemoveSession(qq string) error {
 	sessions, err := LoadSessions()
 	if err != nil {
@@ -126,7 +128,22 @@ func ClearSession() error {
 	return RemoveSession(s.QQ)
 }
 
-// HasSession checks if any session exists
+// SetActiveSession 标记指定的 QQ 号为当前激活状态(最新使用)
+func SetActiveSession(qq string) error {
+	sessions, err := LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	if s, ok := sessions[qq]; ok {
+		s.LastUsed = time.Now()
+		return saveSessionsToFile(sessions)
+	}
+
+	return nil
+}
+
+// HasSession 检查本地是否存在任何已保存的历史登录凭证
 func HasSession() bool {
 	sessions, _ := LoadSessions()
 	return len(sessions) > 0
