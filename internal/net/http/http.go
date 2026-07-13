@@ -45,12 +45,25 @@ type Client struct {
 // NewClient 初始化一个全局 HTTP 客户端
 // 配置了连接超时、KeepAlive 以及重试机制
 func NewClient() *Client {
+	// 定制底层的 HTTP Transport，禁用 HTTP/2
+	// 腾讯部分视频 CDN 节点对 HTTP/2 的支持存在严重缺陷，会导致 protocol error: received DATA after END_STREAM 异常
+	// 强制回退到 HTTP/1.1 可以完美解决视频下载失败的问题
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second, // 防止首字节等待过长
+	}
+
 	return &Client{
 		resty: resty.New().
-			SetTimeout(60 * time.Second).
-			SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true}).
-			SetRetryCount(3).
-			SetRetryWaitTime(2 * time.Second).
+			SetTransport(transport).
+			SetTimeout(0).     // 取消全局超时限制，防止下载大视频时因为网速慢而被强行中断
+			SetRetryCount(0).  // 关键修改：禁用 Resty 的自动重试，完全交由外层 Download 函数处理断点续传
 			SetCookieJar(nil), // 禁用自动 Cookie 管理，防止多账号或好友权限查询时的 Cookie 污染
 		limiter: rate.NewLimiter(rate.Every(500*time.Millisecond), 1), // 默认每 500ms 一个请求
 	}
@@ -144,6 +157,8 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 	for i := 0; i <= retry; i++ {
 		if startBytes > 0 {
 			req.SetHeader("Range", fmt.Sprintf("bytes=%d-", startBytes))
+		} else if val, ok := headers["Range"]; ok {
+			req.SetHeader("Range", val)
 		} else {
 			req.Header.Del("Range")
 		}
@@ -335,6 +350,8 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 		reader = bar.ProxyReader(resp.RawBody())
 		defer func() {
 			if err != nil {
+				// 此时的 err 可能是 io.Copy 返回的网速太慢断流错误
+				// 不要让进度条变僵尸，也不要让它满，安全移除即可
 				bar.Abort(true)
 			} else {
 				bar.SetTotal(-1, true)
@@ -344,7 +361,10 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 
 	_, err = io.Copy(out, reader)
 	if err != nil {
-		return nil, err
+		// 这是核心：如果 io.Copy 因为网络慢/腾讯 CDN 主动断开而报错
+		// 我们必须把这个错误抛给外层 spider.go
+		// spider.go 会根据配置好的重试次数（比如重试3次），重新带着 Range 头进来断点续传！
+		return nil, fmt.Errorf("connection broken during download: %w", err)
 	}
 
 	// 校验文件完整性 (基于 Content-Length)

@@ -27,6 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	iurl "net/url"
+
 	"github.com/fatih/color"
 	"github.com/qinjintian/qq-zone/internal/pkg/util"
 	"github.com/qinjintian/qq-zone/internal/qzone"
@@ -418,13 +420,36 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 
 			if task.isVideo {
 				headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
+				headers["Accept"] = "*/*"
+				headers["Accept-Encoding"] = "identity;q=1, *;q=0"
+				headers["Connection"] = "keep-alive"
+				headers["Sec-Fetch-Dest"] = "video"
+				headers["Sec-Fetch-Mode"] = "no-cors"
+				headers["Sec-Fetch-Site"] = "cross-site"
+				headers["Range"] = "bytes=0-"
+
+				// 严格模拟 v1.0.0 的请求头，防止部分 CDN 节点校验 Host
+				if u, err := iurl.Parse(task.url); err == nil {
+					headers["Host"] = u.Host
+				}
 			}
 
-			res, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 60, p, task.filename, originalName)
-			// 如果是视频且下载失败（可能是因为 f0 链接 404），尝试使用原始链接重试一次
-			if err != nil && task.isVideo && strings.Contains(task.url, ".f0.mp4") {
-				originalURL := strings.Replace(task.url, ".f0.mp4", ".f20.mp4", 1)
-				res, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 60, p, task.filename, originalName)
+			res, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 600, p, task.filename, originalName)
+			// 如果是视频且下载失败（可能是因为 f0 链接 404，或者是大文件下载中途断流）
+			// 这里增加外层重试机制，支持大文件在龟速网络下被 CDN 强踢后的无限次（受限于 retry 参数）断点续传
+			if err != nil && task.isVideo {
+				// 如果是 404，尝试降级画质
+				if strings.Contains(err.Error(), "404") && strings.Contains(task.url, ".f0.mp4") {
+					originalURL := strings.Replace(task.url, ".f0.mp4", ".f20.mp4", 1)
+					res, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 600, p, task.filename, originalName)
+				} else if strings.Contains(err.Error(), "connection broken") || strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "EOF") {
+					// 如果是因为网速太慢，被腾讯 CDN 主动断开连接 (TCP Reset / EOF)
+					// 我们需要进行休眠退避，然后重新发起请求（底层 Http.Download 会自动读取本地已下载的文件大小，并附带 Range 头）
+					s.logger.Warnf("网络波动导致 [%s] 下载中断，准备触发断点续传...", task.filename)
+					time.Sleep(3 * time.Second) // 稍微冷却一下，防止被彻底拉黑
+					// 再次发起下载，底层会自动补上 Range: bytes=已下载大小-
+					res, err = s.client.Http.Download(ctx, task.url, target, headers, 5, 600, p, task.filename, originalName)
+				}
 			}
 
 			if err != nil {
