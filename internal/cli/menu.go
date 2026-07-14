@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (c) 2026 qinjintian. All rights reserved.
  *
  * No Part of this file may be reproduced, stored
@@ -138,6 +138,7 @@ func (c *CLI) Menu(ctx context.Context) {
 			Options: []string{
 				"🏠 下载自己的相册",
 				"👥 下载好友的相册",
+				"🔁 重试上次失败项",
 				"🔍 查看对我开放的好友",
 				"⚙️ 开启/关闭调试模式",
 				"🔄 切换账号/重新登录",
@@ -150,16 +151,18 @@ func (c *CLI) Menu(ctx context.Context) {
 				case 1:
 					return "输入好友 QQ 号，备份其公开或对您开放的相册内容"
 				case 2:
-					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
 				case 3:
+					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+				case 4:
 					status := "关闭"
 					if c.logFact.IsDebug() {
 						status = "开启"
 					}
 					return fmt.Sprintf("控制是否记录详细的 API 请求日志 (当前: %s)", status)
-				case 4:
-					return "注销当前登录状态，并准备扫码登录新账号"
 				case 5:
+					return "注销当前登录状态，并准备扫码登录新账号"
+				case 6:
 					return "结束本次备份任务并安全退出"
 				default:
 					return ""
@@ -198,6 +201,13 @@ func (c *CLI) Menu(ctx context.Context) {
 				Message: color.New(color.FgCyan).Sprint("请输入目标 QQ 号:"),
 			}, &targetUin, survey.WithValidator(survey.Required))
 			c.handleSpider(ctx, targetUin)
+		case strings.Contains(option, "重试上次失败项"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
+			c.handleRetryLastFailed(ctx)
 		case strings.Contains(option, "查看对我开放的好友"):
 			if c.client == nil {
 				if err := c.ensureLogin(ctx); err != nil {
@@ -495,22 +505,158 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 		c.logger.Infof("✅ 已确认: 备份 %d 个指定相册", len(finalAlbums))
 	}
 
-	// 为当前下载任务创建独立的日志文件
-	taskLogger, err := c.logFact.Create(targetUin)
-	if err != nil {
-		c.logger.Errorf("❌ 无法创建任务日志文件: %v", err)
-		taskLogger = c.logger
-	}
+	taskLogger := c.createTaskLogger(targetUin)
+	record := app.NewTaskRecord(app.TaskModeBackup, c.client.QQ, targetUin, finalAlbums, c.config, exclude)
+	c.saveTaskRecord(record, nil, nil, app.TaskStatusPending)
 
 	spider := app.NewSpider(c.client, c.config, finalAlbums, taskLogger)
 
 	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在下载 ━━━━━━━━━━━━━━━━━━━━━━"))
-	results, err := spider.Download(ctx, targetUin, exclude)
+	results, runErr := spider.Download(ctx, targetUin, exclude)
+	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
+
+	status := c.determineTaskStatus(ctx, results, runErr)
+	c.saveTaskRecord(record, results, runErr, status)
+
+	if runErr != nil {
+		c.logger.Errorf("❌ 备份过程中发生异常中断: %v", runErr)
+	}
+
+	c.renderTaskSummary("⭐ 备份任务报告 ⭐", targetUin, results, record, true)
+}
+
+// handleRetryLastFailed 展示当前账号下全部可重试的历史任务，并允许用户手动选择一个任务重试。
+func (c *CLI) handleRetryLastFailed(ctx context.Context) {
+	records, err := app.ListRetryableTasks(c.client.QQ)
 	if err != nil {
-		c.logger.Errorf("❌ 备份过程中发生异常中断: %v", err)
+		c.logger.Errorf("❌ 读取历史任务记录失败: %v", err)
 		return
 	}
-	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
+	if len(records) == 0 {
+		c.logger.Info("✅ 当前没有可重试的失败任务")
+		return
+	}
+
+	options := make([]string, 0, len(records)+1)
+	recordMap := make(map[string]*app.TaskRecord, len(records))
+	for _, record := range records {
+		modeText := "备份"
+		if record.Mode == app.TaskModeRetryFailed {
+			modeText = "失败重试"
+		}
+
+		label := fmt.Sprintf(
+			"[%s] %s | 目标:%s | 待重试:%d | 成功:%d/%d | %s",
+			record.ID,
+			record.CreatedAt.Format("2006-01-02 15:04:05"),
+			record.TargetUin,
+			len(record.OpenFailedItems),
+			record.Summary.Success,
+			record.Summary.Total,
+			modeText,
+		)
+		options = append(options, label)
+		recordMap[label] = record
+	}
+	options = append(options, "↩ 返回上一级")
+
+	var selected string
+	if err := survey.AskOne(&survey.Select{
+		Message:  "请选择要重试的历史任务:",
+		Options:  options,
+		PageSize: 10,
+	}, &selected, survey.WithIcons(func(icons *survey.IconSet) {
+		icons.Question.Text = "🧾"
+		icons.SelectFocus.Text = "▶"
+	})); err != nil || selected == "↩ 返回上一级" {
+		return
+	}
+
+	record := recordMap[selected]
+	if record == nil {
+		c.logger.Warn("⚠️ 未找到所选任务，请重试")
+		return
+	}
+
+	c.logger.Infof("📦 已选择任务 [%s]，目标账号 [%s]，待重试 %d 个文件", record.ID, color.YellowString(record.TargetUin), len(record.OpenFailedItems))
+
+	confirm := false
+	if err := survey.AskOne(&survey.Confirm{
+		Message: fmt.Sprintf("是否立即重试任务 [%s] 的 %d 个失败文件？", record.ID, len(record.OpenFailedItems)),
+		Default: true,
+	}, &confirm); err != nil || !confirm {
+		return
+	}
+
+	taskCfg := c.config.Clone()
+	taskCfg.TaskLimit = record.Config.TaskLimit
+	taskCfg.EnableDynamicTaskLimit = record.Config.EnableDynamicTaskLimit
+	taskCfg.EnableTimeline = record.Config.EnableTimeline
+	taskCfg.EnableMetadataExport = record.Config.EnableMetadataExport
+
+	taskLogger := c.createTaskLogger(record.TargetUin)
+	retryRecord := app.NewRetryTaskRecord(record, taskCfg)
+	c.saveTaskRecord(retryRecord, nil, nil, app.TaskStatusPending)
+
+	spider := app.NewSpider(c.client, taskCfg, record.Albums, taskLogger)
+
+	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在重试失败项 ━━━━━━━━━━━━━━━━━━━━━━"))
+	results, runErr := spider.RetryFailed(ctx, record.TargetUin, record.OpenFailedItems)
+	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 重试完成 ━━━━━━━━━━━━━━━━━━━━━━"))
+
+	status := c.determineTaskStatus(ctx, results, runErr)
+	c.saveTaskRecord(retryRecord, results, runErr, status)
+	if runErr != nil {
+		c.logger.Errorf("❌ 重试过程中发生异常中断: %v", runErr)
+	}
+
+	remainingFailures := []app.FailedItem(nil)
+	if results != nil {
+		remainingFailures = results.FailedItems
+	}
+	if updateErr := app.ResolveOpenFailures(record.ID, remainingFailures, retryRecord.ID); updateErr != nil {
+		c.logger.Warnf("⚠️ 更新原任务失败项状态失败: %v", updateErr)
+	}
+
+	c.renderTaskSummary("⭐ 失败项重试报告 ⭐", record.TargetUin, results, retryRecord, true)
+}
+
+func (c *CLI) createTaskLogger(targetUin string) *zap.SugaredLogger {
+	taskLogger, err := c.logFact.Create(targetUin)
+	if err != nil {
+		c.logger.Errorf("❌ 无法创建任务日志文件: %v", err)
+		return c.logger
+	}
+	return taskLogger
+}
+
+func (c *CLI) determineTaskStatus(ctx context.Context, results *app.DownloadResult, runErr error) app.TaskStatus {
+	if ctx.Err() != nil {
+		return app.TaskStatusCancelled
+	}
+	if runErr != nil && (results == nil || results.Success == 0) {
+		return app.TaskStatusFailed
+	}
+	if results != nil && results.Failed > 0 {
+		return app.TaskStatusPartial
+	}
+	return app.TaskStatusSuccess
+}
+
+func (c *CLI) saveTaskRecord(record *app.TaskRecord, results *app.DownloadResult, runErr error, status app.TaskStatus) {
+	if record == nil {
+		return
+	}
+	record.Finalize(results, runErr, status)
+	if err := record.Save(); err != nil {
+		c.logger.Warnf("⚠️ 写入任务记录失败: %v", err)
+	}
+}
+
+func (c *CLI) renderTaskSummary(title string, targetUin string, results *app.DownloadResult, record *app.TaskRecord, showFailureTable bool) {
+	if results == nil {
+		return
+	}
 
 	green := color.New(color.FgGreen).SprintFunc()
 	cyan := color.New(color.FgCyan).SprintFunc()
@@ -518,38 +664,47 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	red := color.New(color.FgRed).SprintFunc()
 	bold := color.New(color.Bold).SprintFunc()
 
-	summary := fmt.Sprintf("\n%s\n", bold(cyan("⭐ 备份任务报告 ⭐")))
+	summary := fmt.Sprintf("\n%s\n", bold(cyan(title)))
 	summary += fmt.Sprintf(" 🕒 %-10s %s\n", "结束时间:", time.Now().Format("2006/01/02 15:04:05"))
 	summary += fmt.Sprintf(" 👤 %-10s %s\n", "目标账号:", cyan(targetUin))
+	if record != nil {
+		summary += fmt.Sprintf(" 🧾 %-10s %s\n", "任务编号:", yellow(record.ID))
+		summary += fmt.Sprintf(" 📄 %-10s %s\n", "任务记录:", cyan(record.Path))
+	}
 	summary += fmt.Sprintf(" 📊 %-10s 共 %s 个项目\n", "数据概览:", bold(results.Total))
 	summary += fmt.Sprintf(" ✅ %-10s %s (图片: %d, 视频: %d)\n", "成功保存:", green(results.Success), results.ImageCount, results.VideoCount)
 	summary += fmt.Sprintf(" ➕ %-10s %s\n", "新增文件:", green(results.NewAdded))
 	summary += fmt.Sprintf(" ⏭  %-10s %s\n", "跳过已存:", yellow(results.Skipped))
 	summary += fmt.Sprintf(" ❌ %-10s %s\n", "失败数量:", red(results.Failed))
+	if record != nil && len(record.OpenFailedItems) > 0 {
+		summary += fmt.Sprintf(" 🔁 %-10s %s\n", "待重试项:", red(len(record.OpenFailedItems)))
+	}
 	summary += fmt.Sprintf("%s\n", bold(cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")))
 
 	c.logger.Info(summary)
 
-	if len(results.FailedItems) > 0 {
-		color.Red("\n⚠️  失败详情清单:")
-		fTable := tablewriter.NewWriter(os.Stdout)
-		fTable.SetHeader([]string{"相册", "文件名", "错误原因"})
-		fTable.SetAutoWrapText(true)
-		fTable.SetColWidth(50)
-		fTable.SetBorder(false)
-		fTable.SetCenterSeparator("")
-		fTable.SetColumnSeparator("")
-		fTable.SetRowSeparator("")
-		fTable.SetHeaderLine(false)
-		fTable.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
-		fTable.SetAlignment(tablewriter.ALIGN_LEFT)
-
-		for _, item := range results.FailedItems {
-			fTable.Append([]string{item.Album, item.Name, item.Error})
-		}
-		fTable.Render()
-		fmt.Println()
+	if !showFailureTable || len(results.FailedItems) == 0 {
+		return
 	}
+
+	color.Red("\n⚠️  失败详情清单:")
+	fTable := tablewriter.NewWriter(os.Stdout)
+	fTable.SetHeader([]string{"相册", "文件名", "错误原因"})
+	fTable.SetAutoWrapText(true)
+	fTable.SetColWidth(50)
+	fTable.SetBorder(false)
+	fTable.SetCenterSeparator("")
+	fTable.SetColumnSeparator("")
+	fTable.SetRowSeparator("")
+	fTable.SetHeaderLine(false)
+	fTable.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+	fTable.SetAlignment(tablewriter.ALIGN_LEFT)
+
+	for _, item := range results.FailedItems {
+		fTable.Append([]string{item.Album, item.Name, item.Error})
+	}
+	fTable.Render()
+	fmt.Println()
 }
 
 // handleAccessList 查询并渲染允许当前用户访问的好友列表

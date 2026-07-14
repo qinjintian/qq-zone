@@ -65,3 +65,13 @@ func (c *Config) Save() error {
 	}
 	return os.WriteFile(configPath, data, 0644)
 }
+
+// Clone 返回当前配置对象的浅拷贝，便于在单次任务中安全覆写部分选项而不影响全局状态。
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return NewDefaultConfig()
+	}
+
+	cloned := *c
+	return &cloned
+}

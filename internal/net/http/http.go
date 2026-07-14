@@ -9,9 +9,9 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
+ * @LastEditTime: 2026-07-14 16:30:00
  * @FileName: http.go
- * @Description: [定制化 HTTP 客户端封装，支持带进度的文件下载及通用的 GET/POST 请求]
+ * @Description: [定制化 HTTP 客户端封装，支持带进度的大文件下载、安全续传与通用 GET/POST 请求]
  */
 
 package http
@@ -19,11 +19,13 @@ package http
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,19 +37,35 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Client 封装了基于 go-resty 的 HTTP 客户端
-// 包含连接池、超时控制以及全局并发限流器
+// Client 封装了基于 go-resty 的 HTTP 客户端。
 type Client struct {
 	resty   *resty.Client
 	limiter *rate.Limiter
 }
 
-// NewClient 初始化一个全局 HTTP 客户端
-// 配置了连接超时、KeepAlive 以及重试机制
+// resumeMetadata 用于记录断点续传所需的远端资源校验信息。
+type resumeMetadata struct {
+	URI          string    `json:"uri"`
+	ETag         string    `json:"etag,omitempty"`
+	LastModified string    `json:"last_modified,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type progressReader struct {
+	reader     io.Reader
+	onProgress func(int64)
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if n > 0 && r.onProgress != nil {
+		r.onProgress(int64(n))
+	}
+	return n, err
+}
+
+// NewClient 初始化一个全局 HTTP 客户端。
 func NewClient() *Client {
-	// 定制底层的 HTTP Transport，禁用 HTTP/2
-	// 腾讯部分视频 CDN 节点对 HTTP/2 的支持存在严重缺陷，会导致 protocol error: received DATA after END_STREAM 异常
-	// 强制回退到 HTTP/1.1 可以完美解决视频下载失败的问题
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
@@ -56,26 +74,26 @@ func NewClient() *Client {
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   100,
 		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second, // 防止首字节等待过长
+		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
 	return &Client{
 		resty: resty.New().
 			SetTransport(transport).
-			SetTimeout(0).     // 取消全局超时限制，防止下载大视频时因为网速慢而被强行中断
-			SetRetryCount(0).  // 关键修改：禁用 Resty 的自动重试，完全交由外层 Download 函数处理断点续传
-			SetCookieJar(nil), // 禁用自动 Cookie 管理，防止多账号或好友权限查询时的 Cookie 污染
-		limiter: rate.NewLimiter(rate.Every(500*time.Millisecond), 1), // 默认每 500ms 一个请求
+			SetTimeout(0).
+			SetRetryCount(0).
+			SetCookieJar(nil),
+		limiter: rate.NewLimiter(rate.Every(500*time.Millisecond), 1),
 	}
 }
 
-// SetRateLimit 动态调整请求频率限制
+// SetRateLimit 动态调整请求频率限制。
 func (c *Client) SetRateLimit(r rate.Limit, b int) {
 	c.limiter.SetLimit(r)
 	c.limiter.SetBurst(b)
 }
 
-// Get 发起一个基础的 HTTP GET 请求，受全局速率限制保护
+// Get 发起一个基础的 HTTP GET 请求，受全局速率限制保护。
 func (c *Client) Get(ctx context.Context, url string, headers map[string]string) (http.Header, []byte, int, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, nil, 0, err
@@ -91,7 +109,7 @@ func (c *Client) Get(ctx context.Context, url string, headers map[string]string)
 	return resp.Header(), resp.Body(), resp.StatusCode(), nil
 }
 
-// Head 发起一个 HTTP HEAD 请求，常用于获取文件大小 (Content-Length) 而不下载实体
+// Head 发起一个 HTTP HEAD 请求，常用于获取文件大小而不下载实体。
 func (c *Client) Head(ctx context.Context, url string, headers map[string]string) (http.Header, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err
@@ -110,7 +128,7 @@ func (c *Client) Head(ctx context.Context, url string, headers map[string]string
 	return resp.Header(), nil
 }
 
-// PostForm 发起一个 HTTP POST 表单请求，用于提交数据
+// PostForm 发起一个 HTTP POST 表单请求，用于提交数据。
 func (c *Client) PostForm(ctx context.Context, url string, params map[string]string, headers map[string]string) ([]byte, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err
@@ -130,257 +148,402 @@ func (c *Client) PostForm(ctx context.Context, url string, params map[string]str
 	return resp.Body(), nil
 }
 
-// Download 执行大文件流式下载任务
-// 核心功能：断点续传 (HTTP Range)、文件后缀嗅探、指数退避风控防御、进度条渲染
-func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string) (res map[string]interface{}, err error) {
-	// 下载大文件时不建议加全局 QPS 限制，否则会拖慢下载速度
-	// 但如果是获取下载链接等小请求，可以考虑。这里暂时不给 Download 加 Wait
+// Download 执行大文件流式下载任务。
+// onProgress 会在每次成功读取到响应体字节后回调，用于上层吞吐量统计。
+func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string, onProgress func(int64)) (res map[string]interface{}, err error) {
 	targetDir := filepath.Dir(target)
 	if !util.IsDir(targetDir) {
-		if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
-			return nil, fmt.Errorf("failed to create target directory: %w", err)
+		if mkdirErr := os.MkdirAll(targetDir, os.ModePerm); mkdirErr != nil {
+			return nil, fmt.Errorf("failed to create target directory: %w", mkdirErr)
 		}
 	}
 
-	// 检查本地文件是否已存在，支持断点续传
-	var startBytes int64 = 0
-	if fi, err := os.Stat(target); err == nil {
-		startBytes = fi.Size()
-	}
+	_ = timeout
 
-	req := c.resty.R().
-		SetContext(context.WithoutCancel(ctx)).
-		SetHeaders(headers).
-		SetDoNotParseResponse(true)
+	currentTarget := target
+	currentName := name
+	maxAttempts := retry + 1
 
-	var resp *resty.Response
-	for i := 0; i <= retry; i++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		startBytes := int64(0)
+		if fi, statErr := os.Stat(currentTarget); statErr == nil {
+			startBytes = fi.Size()
+		}
+
+		metaPath := resumeMetadataPath(currentTarget)
+		meta, _ := loadResumeMetadata(metaPath)
+
+		req := c.resty.R().
+			SetContext(context.WithoutCancel(ctx)).
+			SetHeaders(headers).
+			SetDoNotParseResponse(true)
+
 		if startBytes > 0 {
 			req.SetHeader("Range", fmt.Sprintf("bytes=%d-", startBytes))
+			if meta != nil && meta.URI == uri {
+				if meta.ETag != "" {
+					req.SetHeader("If-Range", meta.ETag)
+				} else if meta.LastModified != "" {
+					req.SetHeader("If-Range", meta.LastModified)
+				}
+			}
 		} else if val, ok := headers["Range"]; ok {
 			req.SetHeader("Range", val)
+			req.Header.Del("If-Range")
 		} else {
 			req.Header.Del("Range")
+			req.Header.Del("If-Range")
 		}
 
-		var reqErr error
-		resp, reqErr = req.Get(uri)
+		resp, reqErr := req.Get(uri)
 		if reqErr != nil {
 			err = reqErr
-			continue
-		}
-
-		if resp.StatusCode() == 200 || resp.StatusCode() == 206 {
-			err = nil
-			break
-		}
-
-		status := resp.StatusCode()
-		resp.RawBody().Close()
-		err = fmt.Errorf("download failed with status: %s", resp.Status())
-
-		// 如果检测到 403/429 等可能是风控的错误，进行退避
-		if status == 403 || status == 429 || status == 503 {
-			if i < retry {
-				// 指数退避，基础等待 3 秒 (3s, 6s, 12s...)
-				sleepSec := (1 << i) * 3
-
-				if p != nil {
-					yellow := color.New(color.FgYellow).SprintFunc()
-					msg := yellow(fmt.Sprintf("[风控拦截, 暂停 %ds...] %s", sleepSec, name))
-					tempBar := p.AddBar(int64(sleepSec),
-						mpb.BarRemoveOnComplete(),
-						mpb.PrependDecorators(
-							decor.Name(msg, decor.WC{W: 55, C: decor.DindentRight}),
-						),
-						mpb.AppendDecorators(decor.CountersNoUnit("%d / %d s")),
-					)
-					for s := 0; s < sleepSec; s++ {
-						select {
-						case <-ctx.Done():
-							tempBar.Abort(true)
-							return nil, ctx.Err()
-						case <-time.After(time.Second):
-							tempBar.Increment()
-						}
-					}
-					tempBar.SetTotal(-1, true) // 完成并移除
-				} else {
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(time.Duration(sleepSec) * time.Second):
-					}
+			if attempt < maxAttempts-1 {
+				if waitErr := c.waitRetry(ctx, p, attempt, currentName, false); waitErr != nil {
+					return nil, waitErr
 				}
 				continue
 			}
-		} else {
-			// 普通 HTTP 错误也重试，但不加长退避
-			if i < retry {
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(1 * time.Second):
+			return nil, err
+		}
+
+		rawBody := resp.RawBody()
+		statusCode := resp.StatusCode()
+		if statusCode == http.StatusRequestedRangeNotSatisfiable && startBytes > 0 {
+			rawBody.Close()
+			_ = os.Remove(currentTarget)
+			_ = removeResumeMetadata(metaPath)
+			maxAttempts++
+			continue
+		}
+
+		if statusCode != http.StatusOK && statusCode != http.StatusPartialContent {
+			rawBody.Close()
+			err = fmt.Errorf("download failed with status: %s", resp.Status())
+			if attempt < maxAttempts-1 {
+				isRiskControl := statusCode == http.StatusForbidden || statusCode == http.StatusTooManyRequests || statusCode == http.StatusServiceUnavailable
+				if waitErr := c.waitRetry(ctx, p, attempt, currentName, isRiskControl); waitErr != nil {
+					return nil, waitErr
 				}
+				continue
+			}
+			return nil, err
+		}
+
+		contentType := resp.Header().Get("Content-Type")
+		newExt := detectFileExt(contentType)
+		if newExt != "" && !strings.EqualFold(filepath.Ext(currentTarget), newExt) {
+			oldTarget := currentTarget
+			newTarget := strings.TrimSuffix(currentTarget, filepath.Ext(currentTarget)) + newExt
+			if startBytes > 0 {
+				_ = os.Rename(oldTarget, newTarget)
+				_ = renameResumeMetadata(resumeMetadataPath(oldTarget), resumeMetadataPath(newTarget))
+			}
+			currentTarget = newTarget
+			currentName = strings.TrimSuffix(currentName, filepath.Ext(currentName)) + newExt
+
+			if fi, statErr := os.Stat(currentTarget); statErr == nil {
+				startBytes = fi.Size()
+			} else {
+				startBytes = 0
+			}
+			metaPath = resumeMetadataPath(currentTarget)
+		}
+
+		if statusCode == http.StatusPartialContent && startBytes > 0 {
+			rangeStart, parseErr := parseContentRangeStart(resp.Header().Get("Content-Range"))
+			if parseErr != nil {
+				rawBody.Close()
+				return nil, fmt.Errorf("invalid Content-Range for resume: %w", parseErr)
+			}
+			if rangeStart != startBytes {
+				rawBody.Close()
+				return nil, fmt.Errorf("resume offset mismatch: local=%d, remote=%d", startBytes, rangeStart)
 			}
 		}
-	}
 
-	if err != nil {
-		return nil, err
-	}
-	defer resp.RawBody().Close()
-
-	// 动态判断并修正文件扩展名 (通过 Content-Type)
-	contentType := resp.Header().Get("Content-Type")
-	var newExt string
-	switch {
-	case strings.Contains(contentType, "image/jpeg"):
-		newExt = ".jpg"
-	case strings.Contains(contentType, "image/png"):
-		newExt = ".png"
-	case strings.Contains(contentType, "image/gif"):
-		newExt = ".gif"
-	case strings.Contains(contentType, "image/webp"):
-		newExt = ".webp"
-	case strings.Contains(contentType, "image/heic"):
-		newExt = ".heic"
-	case strings.Contains(contentType, "image/bmp"):
-		newExt = ".bmp"
-	case strings.Contains(contentType, "video/mp4"):
-		newExt = ".mp4"
-	}
-
-	if newExt != "" && !strings.EqualFold(filepath.Ext(target), newExt) {
-		newTarget := strings.TrimSuffix(target, filepath.Ext(target)) + newExt
-		if startBytes > 0 {
-			// 本地存在部分下载的文件，重命名以匹配新的后缀
-			_ = os.Rename(target, newTarget)
+		meta = &resumeMetadata{
+			URI:          uri,
+			ETag:         resp.Header().Get("ETag"),
+			LastModified: resp.Header().Get("Last-Modified"),
+			UpdatedAt:    time.Now(),
 		}
-		target = newTarget
-		name = strings.TrimSuffix(name, filepath.Ext(name)) + newExt
-	}
+		_ = saveResumeMetadata(metaPath, meta)
 
-	// 如果服务器支持 Range 或者返回 200，说明需要重新开始
-	var out *os.File
-	if resp.StatusCode() == 206 {
-		// 使用 O_CREATE 以防万一，尽管通常 206 意味着文件已存在
-		out, err = os.OpenFile(target, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-	} else {
-		out, err = os.Create(target)
-		startBytes = 0
-	}
-
-	if err != nil {
-		return nil, err
-	}
-	defer out.Close()
-
-	var reader io.Reader = resp.RawBody()
-	if p != nil {
-		contentLength := resp.RawResponse.ContentLength
-		if contentLength > 0 {
-			contentLength += startBytes
+		var out *os.File
+		if statusCode == http.StatusPartialContent {
+			out, err = os.OpenFile(currentTarget, os.O_WRONLY|os.O_CREATE, 0644)
+			if err == nil {
+				_, err = out.Seek(startBytes, io.SeekStart)
+			}
+		} else {
+			out, err = os.Create(currentTarget)
+			startBytes = 0
+		}
+		if err != nil {
+			rawBody.Close()
+			return nil, err
 		}
 
-		startTime := time.Now()
-		var lastSpeed string
-
-		bar := p.AddBar(contentLength,
-			mpb.BarRemoveOnComplete(), // 完成后自动彻底移除子进度条
-			mpb.PrependDecorators(
-				// 例如：原文件: 2026-07-08 -> 保存为: IMG_20260707.jpg
-				decor.Name(fmt.Sprintf("原文件: %s -> 保存为: %s", originalName, name), decor.WC{W: 55, C: decor.DindentRight}),
-				decor.Name("  "), // 增加显式空格，防止粘连
-				// 添加说明: 已下载/总大小
-				decor.OnComplete(decor.Name("进度: "), "进度: "),
-				decor.CountersKibiByte("% .2f / % .2f"),
-			),
-			mpb.AppendDecorators(
-				decor.Name(" | 剩余: "),
-				decor.Any(func(st decor.Statistics) string {
-					if st.Completed {
-						return "0s"
-					}
-					if st.Total <= 0 {
-						return "0s"
-					}
-					elapsed := time.Since(startTime)
-					if elapsed < 100*time.Millisecond {
-						return "0s"
-					}
-					currentDownloaded := st.Current - startBytes
-					if currentDownloaded <= 0 {
-						return "0s"
-					}
-					speed := float64(currentDownloaded) / elapsed.Seconds()
-					if speed == 0 {
-						return "0s"
-					}
-					remaining := st.Total - st.Current
-					if remaining < 0 {
-						remaining = 0
-					}
-					eta := time.Duration(float64(remaining)/speed) * time.Second
-					return eta.Round(time.Second).String()
-				}, decor.WC{W: 5, C: decor.DindentRight}),
-				decor.Name(" | 速度: "),
-				decor.Any(func(st decor.Statistics) string {
-					if st.Completed && lastSpeed != "" {
-						return lastSpeed
-					}
-					elapsed := time.Since(startTime)
-					if elapsed < 100*time.Millisecond {
-						return "0 B/s"
-					}
-					// 仅计算本次下载的字节数以获得实时速度
-					currentDownloaded := st.Current - startBytes
-					if currentDownloaded < 0 {
-						currentDownloaded = 0
-					}
-					speed := float64(currentDownloaded) / elapsed.Seconds()
-					lastSpeed = util.FormatBytes(int64(speed)) + "/s"
-					return lastSpeed
-				}, decor.WC{W: 15, C: decor.DindentRight}),
-			),
+		var (
+			bar       *mpb.Bar
+			reader    io.Reader = rawBody
+			copyErr   error
+			lastSpeed string
 		)
-		if startBytes > 0 {
-			bar.SetCurrent(startBytes)
+
+		if p != nil {
+			contentLength := resp.RawResponse.ContentLength
+			if contentLength > 0 {
+				contentLength += startBytes
+			}
+
+			startTime := time.Now()
+			bar = p.AddBar(contentLength,
+				mpb.BarRemoveOnComplete(),
+				mpb.PrependDecorators(
+					decor.Name(fmt.Sprintf("原文件: %s -> 保存为: %s", originalName, currentName), decor.WC{W: 55, C: decor.DindentRight}),
+					decor.Name("  "),
+					decor.OnComplete(decor.Name("进度: "), "进度: "),
+					decor.CountersKibiByte("% .2f / % .2f"),
+				),
+				mpb.AppendDecorators(
+					decor.Name(" | 剩余: "),
+					decor.Any(func(st decor.Statistics) string {
+						if st.Completed || st.Total <= 0 {
+							return "0s"
+						}
+						elapsed := time.Since(startTime)
+						if elapsed < 100*time.Millisecond {
+							return "0s"
+						}
+						currentDownloaded := st.Current - startBytes
+						if currentDownloaded <= 0 {
+							return "0s"
+						}
+						speed := float64(currentDownloaded) / elapsed.Seconds()
+						if speed == 0 {
+							return "0s"
+						}
+						remaining := st.Total - st.Current
+						if remaining < 0 {
+							remaining = 0
+						}
+						eta := time.Duration(float64(remaining)/speed) * time.Second
+						return eta.Round(time.Second).String()
+					}, decor.WC{W: 5, C: decor.DindentRight}),
+					decor.Name(" | 速度: "),
+					decor.Any(func(st decor.Statistics) string {
+						if st.Completed && lastSpeed != "" {
+							return lastSpeed
+						}
+						elapsed := time.Since(startTime)
+						if elapsed < 100*time.Millisecond {
+							return "0 B/s"
+						}
+						currentDownloaded := st.Current - startBytes
+						if currentDownloaded < 0 {
+							currentDownloaded = 0
+						}
+						speed := float64(currentDownloaded) / elapsed.Seconds()
+						lastSpeed = util.FormatBytes(int64(speed)) + "/s"
+						return lastSpeed
+					}, decor.WC{W: 15, C: decor.DindentRight}),
+				),
+			)
+			if startBytes > 0 {
+				bar.SetCurrent(startBytes)
+			}
+			reader = bar.ProxyReader(rawBody)
 		}
-		reader = bar.ProxyReader(resp.RawBody())
-		defer func() {
-			if err != nil {
-				// 此时的 err 可能是 io.Copy 返回的网速太慢断流错误
-				// 不要让进度条变僵尸，也不要让它满，安全移除即可
+
+		if onProgress != nil {
+			reader = &progressReader{
+				reader:     reader,
+				onProgress: onProgress,
+			}
+		}
+
+		_, copyErr = io.Copy(out, reader)
+		closeErr := out.Close()
+		rawBody.Close()
+
+		if bar != nil {
+			if copyErr != nil || closeErr != nil {
 				bar.Abort(true)
 			} else {
 				bar.SetTotal(-1, true)
 			}
-		}()
-	}
+		}
 
-	_, err = io.Copy(out, reader)
-	if err != nil {
-		// 这是核心：如果 io.Copy 因为网络慢/腾讯 CDN 主动断开而报错
-		// 我们必须把这个错误抛给外层 spider.go
-		// spider.go 会根据配置好的重试次数（比如重试3次），重新带着 Range 头进来断点续传！
-		return nil, fmt.Errorf("connection broken during download: %w", err)
-	}
+		if copyErr != nil {
+			err = fmt.Errorf("connection broken during download: %w", copyErr)
+			if attempt < maxAttempts-1 {
+				if waitErr := c.waitRetry(ctx, p, attempt, currentName, false); waitErr != nil {
+					return nil, waitErr
+				}
+				continue
+			}
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
 
-	// 校验文件完整性 (基于 Content-Length)
-	if resp.RawResponse.ContentLength > 0 {
-		fi, err := os.Stat(target)
-		if err == nil {
-			expectedSize := resp.RawResponse.ContentLength + startBytes
-			if fi.Size() < expectedSize {
-				return nil, fmt.Errorf("file integrity check failed: expected %d bytes, got %d bytes", expectedSize, fi.Size())
+		if resp.RawResponse.ContentLength > 0 {
+			fi, statErr := os.Stat(currentTarget)
+			if statErr == nil {
+				expectedSize := resp.RawResponse.ContentLength + startBytes
+				if fi.Size() < expectedSize {
+					err = fmt.Errorf("file integrity check failed: expected %d bytes, got %d bytes", expectedSize, fi.Size())
+					if attempt < maxAttempts-1 {
+						if waitErr := c.waitRetry(ctx, p, attempt, currentName, false); waitErr != nil {
+							return nil, waitErr
+						}
+						continue
+					}
+					return nil, err
+				}
 			}
 		}
+
+		_ = removeResumeMetadata(metaPath)
+		return map[string]interface{}{
+			"filename": filepath.Base(currentTarget),
+			"dir":      targetDir,
+			"path":     currentTarget,
+		}, nil
 	}
 
-	return map[string]interface{}{
-		"filename": filepath.Base(target),
-		"dir":      targetDir,
-		"path":     target,
-	}, nil
+	return nil, fmt.Errorf("download failed after %d attempts", maxAttempts)
+}
+
+// waitRetry 负责在下载失败后按不同场景进行短暂退避。
+func (c *Client) waitRetry(ctx context.Context, p *mpb.Progress, attempt int, name string, isRiskControl bool) error {
+	sleepSec := 1
+	if isRiskControl {
+		sleepSec = (1 << attempt) * 3
+	}
+
+	if p != nil {
+		yellow := color.New(color.FgYellow).SprintFunc()
+		msg := yellow(fmt.Sprintf("[重试等待 %ds...] %s", sleepSec, name))
+		tempBar := p.AddBar(int64(sleepSec),
+			mpb.BarRemoveOnComplete(),
+			mpb.PrependDecorators(
+				decor.Name(msg, decor.WC{W: 55, C: decor.DindentRight}),
+			),
+			mpb.AppendDecorators(decor.CountersNoUnit("%d / %d s")),
+		)
+		for s := 0; s < sleepSec; s++ {
+			select {
+			case <-ctx.Done():
+				tempBar.Abort(true)
+				return ctx.Err()
+			case <-time.After(time.Second):
+				tempBar.Increment()
+			}
+		}
+		tempBar.SetTotal(-1, true)
+		return nil
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Duration(sleepSec) * time.Second):
+		return nil
+	}
+}
+
+// detectFileExt 根据响应头推断目标文件后缀。
+func detectFileExt(contentType string) string {
+	switch {
+	case strings.Contains(contentType, "image/jpeg"):
+		return ".jpg"
+	case strings.Contains(contentType, "image/png"):
+		return ".png"
+	case strings.Contains(contentType, "image/gif"):
+		return ".gif"
+	case strings.Contains(contentType, "image/webp"):
+		return ".webp"
+	case strings.Contains(contentType, "image/heic"):
+		return ".heic"
+	case strings.Contains(contentType, "image/bmp"):
+		return ".bmp"
+	case strings.Contains(contentType, "video/mp4"):
+		return ".mp4"
+	default:
+		return ""
+	}
+}
+
+// parseContentRangeStart 解析形如 "bytes 1024-2047/4096" 的响应头，返回起始偏移。
+func parseContentRangeStart(contentRange string) (int64, error) {
+	if contentRange == "" {
+		return 0, fmt.Errorf("missing Content-Range header")
+	}
+
+	parts := strings.SplitN(contentRange, " ", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("malformed Content-Range: %s", contentRange)
+	}
+
+	rangePart := strings.SplitN(parts[1], "/", 2)[0]
+	bounds := strings.SplitN(rangePart, "-", 2)
+	if len(bounds) != 2 {
+		return 0, fmt.Errorf("malformed Content-Range bounds: %s", contentRange)
+	}
+
+	start, err := strconv.ParseInt(bounds[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid Content-Range start %q: %w", bounds[0], err)
+	}
+	return start, nil
+}
+
+func resumeMetadataPath(target string) string {
+	return target + ".resume.json"
+}
+
+func loadResumeMetadata(path string) (*resumeMetadata, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var meta resumeMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, err
+	}
+	return &meta, nil
+}
+
+func saveResumeMetadata(path string, meta *resumeMetadata) error {
+	if meta == nil {
+		return nil
+	}
+
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func removeResumeMetadata(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func renameResumeMetadata(oldPath string, newPath string) error {
+	if _, err := os.Stat(oldPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.Rename(oldPath, newPath)
 }

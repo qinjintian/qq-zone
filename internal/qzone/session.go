@@ -22,9 +22,9 @@ import (
 	"time"
 )
 
-const (
-	OldSessionPath = "storage/session.json"
-	SessionsPath   = "storage/sessions.json"
+var (
+	// SessionPath 定义了多账号会话信息的持久化文件路径
+	SessionPath = "storage/sessions.json"
 )
 
 // Session 记录了单个账号登录状态的核心凭证与信息
@@ -40,23 +40,8 @@ type Session struct {
 func LoadSessions() (map[string]*Session, error) {
 	sessions := make(map[string]*Session)
 
-	// 1. 尝试迁移旧的单账号 session.json
-	if _, err := os.Stat(OldSessionPath); err == nil {
-		data, err := os.ReadFile(OldSessionPath)
-		if err == nil {
-			var s Session
-			if err := json.Unmarshal(data, &s); err == nil {
-				s.LastUsed = time.Now()
-				sessions[s.QQ] = &s
-				// 迁移后保存到新路径并尝试删除旧文件
-				_ = saveSessionsToFile(sessions)
-				_ = os.Remove(OldSessionPath)
-			}
-		}
-	}
-
-	// 2. 加载多账号 sessions.json
-	data, err := os.ReadFile(SessionsPath)
+	// 尝试加载新的多账号 sessions.json
+	data, err := os.ReadFile(SessionPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return sessions, nil
@@ -149,8 +134,10 @@ func HasSession() bool {
 	return len(sessions) > 0
 }
 
+// saveSessionsToFile 将多账号状态全量写入本地文件
 func saveSessionsToFile(sessions map[string]*Session) error {
-	dir := filepath.Dir(SessionsPath)
+	// 确保目录存在
+	dir := filepath.Dir(SessionPath)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		_ = os.MkdirAll(dir, os.ModePerm)
 	}
@@ -160,5 +147,5 @@ func saveSessionsToFile(sessions map[string]*Session) error {
 		return err
 	}
 
-	return os.WriteFile(SessionsPath, data, 0644)
+	return os.WriteFile(SessionPath, data, 0644)
 }

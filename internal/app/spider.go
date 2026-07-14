@@ -9,9 +9,9 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
+ * @LastEditTime: 2026-07-14 16:30:00
  * @FileName: spider.go
- * @Description: [QQ 空间媒体爬虫核心引擎，基于 errgroup 实现多协程并发下载与进度统计]
+ * @Description: [QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度]
  */
 
 package app
@@ -39,14 +39,19 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
-	Album string
-	Name  string
-	Error string
+	Album     string `json:"album"`
+	Name      string `json:"name"`
+	Error     string `json:"error"`
+	TargetUin string `json:"target_uin,omitempty"`
+	AlbumID   string `json:"album_id,omitempty"`
+	AlbumRaw  string `json:"album_raw,omitempty"`
+	PhotoRaw  string `json:"photo_raw,omitempty"`
+	IsVideo   bool   `json:"is_video,omitempty"`
 }
 
-// DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标
-// 由于存在多协程并发写入，结构体内包含了互斥锁 (Mutex) 和原子操作 (atomic) 以保证数据一致性
+// DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
 type DownloadResult struct {
 	Total       uint64       // 任务规划要下载的媒体文件总数
 	Success     uint64       // 成功下载落盘的文件数（包含全新下载和增量跳过）
@@ -55,12 +60,12 @@ type DownloadResult struct {
 	Failed      uint64       // 发生异常导致下载失败的文件数
 	VideoCount  uint64       // 成功处理的视频文件（含实况图视频）数量
 	ImageCount  uint64       // 成功处理的静态图片数量
-	BytesDone   uint64       // 记录已下载的累积字节数，用于动态计算平均下载速度
-	FailedItems []FailedItem // 收集所有失败文件的上下文信息，用于生成最终的错误报告
+	BytesDone   uint64       // 实时记录已成功写盘的网络字节数，用于动态并发调优
+	FailedItems []FailedItem // 收集所有失败文件的上下文信息，用于生成最终错误报告和失败重试
 	mu          sync.Mutex   // 并发写 FailedItems 时的互斥锁
 }
 
-// addFailedItem 并发安全地将一条失败记录追加到 FailedItems 队列中，并将失败计数器原子 +1
+// addFailedItem 并发安全地将一条失败记录追加到 FailedItems 队列中，并将失败计数器原子 +1。
 func (r *DownloadResult) addFailedItem(item FailedItem) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -68,8 +73,7 @@ func (r *DownloadResult) addFailedItem(item FailedItem) {
 	atomic.AddUint64(&r.Failed, 1)
 }
 
-// Spider 负责调度和执行整个相册备份的核心业务逻辑
-// 包含并发控制、断点续传、文件分类与统计等功能
+// Spider 负责调度和执行整个相册备份的核心业务逻辑。
 type Spider struct {
 	client    *qzone.Client
 	whitelist map[string]bool
@@ -79,7 +83,7 @@ type Spider struct {
 	results DownloadResult
 }
 
-// NewSpider 实例化一个下载爬虫
+// NewSpider 实例化一个下载爬虫。
 func NewSpider(client *qzone.Client, config *Config, albums []string, logger *zap.SugaredLogger) *Spider {
 	wl := make(map[string]bool)
 	for _, a := range albums {
@@ -93,9 +97,7 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 	}
 }
 
-// Download 开始执行批量相册下载任务
-// targetUin: 目标好友 QQ 号 (或自己的 QQ 号)
-// exclude: 是否开启增量下载 (跳过本地已存在的完整文件)
+// Download 开始执行批量相册下载任务。
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
@@ -123,7 +125,6 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 		filteredAlbums = append(filteredAlbums, album)
 	}
 
-	// 初始化 mpb
 	p := mpb.NewWithContext(ctx)
 
 	for i, album := range filteredAlbums {
@@ -134,32 +135,86 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 			return &s.results, nil
 		default:
 		}
+
 		if err := s.downloadAlbum(ctx, p, targetUin, album, i+1, len(filteredAlbums), exclude); err != nil {
 			s.logger.Errorf("failed to download album [%s]: %v", album.Get("name").String(), err)
 		}
 	}
 
 	p.Wait()
-
 	return &s.results, nil
 }
 
-// downloadAlbum 负责下载单个相册内的所有照片和视频
-// 内部实现了智能动态并发协程池 (Dynamic Worker Pool)
+// RetryFailed 基于历史任务记录中保存的失败上下文，仅重试仍未解决的失败文件。
+// 失败重试始终强制使用增量模式，避免误删已经成功下载的数据。
+func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems []FailedItem) (*DownloadResult, error) {
+	s.results = DownloadResult{}
+	if len(failedItems) == 0 {
+		return &s.results, nil
+	}
+
+	atomic.StoreUint64(&s.results.Total, uint64(len(failedItems)))
+	p := mpb.NewWithContext(ctx)
+	retryBar := p.AddBar(int64(len(failedItems)),
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name("Retry Failed Items ", decor.WC{W: 20, C: decor.DindentRight}),
+			decor.CountersNoUnit("%d / %d"),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(),
+			decor.Name(" ] "),
+			decor.OnComplete(decor.Name("", decor.WC{W: 5}), "Done!"),
+		),
+	)
+
+	localFileCache := make(map[string]map[string]string)
+	for _, item := range failedItems {
+		select {
+		case <-ctx.Done():
+			p.Wait()
+			return &s.results, nil
+		default:
+		}
+
+		album := gjson.Parse(item.AlbumRaw)
+		photo := gjson.Parse(item.PhotoRaw)
+		if !album.Exists() || !photo.Exists() {
+			s.results.addFailedItem(FailedItem{
+				Album:     item.Album,
+				Name:      item.Name,
+				Error:     "任务记录缺少原始相册/照片数据，无法自动重试，请重新执行备份任务",
+				TargetUin: targetUin,
+				AlbumID:   item.AlbumID,
+				AlbumRaw:  item.AlbumRaw,
+				PhotoRaw:  item.PhotoRaw,
+				IsVideo:   item.IsVideo,
+			})
+			retryBar.Increment()
+			continue
+		}
+
+		albumPath := s.buildAlbumPath(targetUin, album.Get("name").String())
+		localFiles, ok := localFileCache[albumPath]
+		if !ok {
+			localFiles = s.buildLocalFileIndex(albumPath, true)
+			localFileCache[albumPath] = localFiles
+		}
+
+		_ = s.downloadItem(ctx, p, targetUin, photo, album, albumPath, true, localFiles)
+		retryBar.Increment()
+	}
+
+	p.Wait()
+	return &s.results, nil
+}
+
+// downloadAlbum 负责下载单个相册内的所有照片和视频。
 func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin string, album gjson.Result, albumIdx, albumTotal int, exclude bool) error {
 	albumName := album.Get("name").String()
 	albumID := album.Get("id").String()
+	albumPath := s.buildAlbumPath(targetUin, albumName)
 
-	baseDir := filepath.Join("storage", "qzone", targetUin, "album")
-	safeName := sanitizePath(albumName)
-	albumPath := filepath.Join(baseDir, safeName)
-
-	if err := os.MkdirAll(albumPath, os.ModePerm); err != nil {
-		albumPath = filepath.Join(baseDir, util.MD5(albumName)[8:24])
-		_ = os.MkdirAll(albumPath, os.ModePerm)
-	}
-
-	// 导出相册元数据
 	if s.config.EnableMetadataExport {
 		metaPath := filepath.Join(albumPath, "album_metadata.json")
 		_ = os.WriteFile(metaPath, []byte(album.Raw), 0644)
@@ -172,7 +227,6 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 
 	atomic.AddUint64(&s.results.Total, uint64(len(photos)))
 
-	// 为当前相册创建一个总进度条
 	albumBar := p.AddBar(int64(len(photos)),
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
@@ -186,32 +240,18 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		),
 	)
 
-	localFiles := make(map[string]string)
-	if exclude {
-		files, _ := util.ListFiles(albumPath)
-		for _, f := range files {
-			name := filepath.Base(f)
-			if idx := strings.LastIndex(name, "."); idx != -1 {
-				name = name[:idx]
-			}
-			localFiles[name] = f
-		}
-	} else {
-		_ = os.RemoveAll(albumPath)
-		_ = os.MkdirAll(albumPath, os.ModePerm)
-	}
+	localFiles := s.buildLocalFileIndex(albumPath, exclude)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// 并发协程动态扩缩容 (Dynamic Worker Pool)
 	var active int32
 	baseLimit := int32(s.config.TaskLimit)
 	if baseLimit < 1 {
 		baseLimit = 10
 	}
-	var currentLimit int32 = baseLimit
-	var maxLimit int32 = baseLimit * 3 // 允许突发到3倍并发
-	var minLimit int32 = 1             // 最小并发数
+	currentLimit := baseLimit
+	maxLimit := baseLimit * 3
+	minLimit := int32(1)
 
 	taskCh := make(chan int, len(photos))
 	for i := range photos {
@@ -219,10 +259,8 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	}
 	close(taskCh)
 
-	// 任务分发器
 	g.Go(func() error {
 		for i := range taskCh {
-			// 等待可用并发槽
 			for {
 				if atomic.LoadInt32(&active) < atomic.LoadInt32(&currentLimit) {
 					break
@@ -241,41 +279,65 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 			g.Go(func() error {
 				defer atomic.AddInt32(&active, -1)
 				defer albumBar.Increment()
-				return s.downloadItem(gCtx, p, targetUin, i+1, photo, album, albumIdx, albumTotal, albumPath, len(photos), exclude, localFiles)
+				return s.downloadItem(gCtx, p, targetUin, photo, album, albumPath, exclude, localFiles)
 			})
 		}
 		return nil
 	})
 
-	// 监控与动态扩缩容算法
 	if s.config.EnableDynamicTaskLimit {
 		g.Go(func() error {
-			var lastSuccess uint64
+			var (
+				lastBytes      uint64
+				lastFailed     uint64
+				lastThroughput float64
+				stagnantTicks  int
+			)
+			sampleWindow := 2 * time.Second
+
 			for {
 				select {
 				case <-gCtx.Done():
 					return nil
-				case <-time.After(2 * time.Second):
-					// 启发式网络带宽探测：
-					currSuccess := atomic.LoadUint64(&s.results.Success)
-					diff := currSuccess - lastSuccess
-					lastSuccess = currSuccess
-
+				case <-time.After(sampleWindow):
 					cl := atomic.LoadInt32(&currentLimit)
 					act := atomic.LoadInt32(&active)
-
-					// 任务全部分发且执行完毕时退出监控
 					if len(taskCh) == 0 && act == 0 {
 						return nil
 					}
 
-					if diff > 0 && act >= cl && cl < maxLimit {
-						// 网络空闲且处理迅速，增加并发
-						atomic.AddInt32(&currentLimit, 1)
-					} else if diff == 0 && act >= cl && cl > minLimit {
-						// 出现拥堵或遇到大文件，减少并发以防被风控或占满带宽
+					currBytes := atomic.LoadUint64(&s.results.BytesDone)
+					bytesDiff := currBytes - lastBytes
+					lastBytes = currBytes
+
+					currFailed := atomic.LoadUint64(&s.results.Failed)
+					failedDiff := currFailed - lastFailed
+					lastFailed = currFailed
+
+					throughput := float64(bytesDiff) / sampleWindow.Seconds()
+					if failedDiff > 0 && cl > minLimit {
 						atomic.AddInt32(&currentLimit, -1)
+						stagnantTicks = 0
+						lastThroughput = throughput
+						continue
 					}
+
+					if throughput == 0 {
+						stagnantTicks++
+						if stagnantTicks >= 2 && act >= cl && cl > minLimit {
+							atomic.AddInt32(&currentLimit, -1)
+							stagnantTicks = 0
+						}
+						continue
+					}
+
+					stagnantTicks = 0
+					if act >= cl && cl < maxLimit {
+						if lastThroughput == 0 || throughput >= lastThroughput*0.9 {
+							atomic.AddInt32(&currentLimit, 1)
+						}
+					}
+					lastThroughput = throughput
 				}
 			}
 		})
@@ -284,15 +346,14 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	return g.Wait()
 }
 
-// downloadItem 负责处理单个文件 (照片/实况图/普通视频) 的分析、路径拼接、断点续传检查与下载调用
-func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin string, idx int, photo, album gjson.Result, albumIdx, albumTotal int, albumPath string, total int, exclude bool, localFiles map[string]string) error {
+// downloadItem 负责处理单个文件 (照片/实况图/普通视频) 的分析、路径拼接、断点续传检查与下载调用。
+func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin string, photo, album gjson.Result, albumPath string, exclude bool, localFiles map[string]string) error {
 	select {
 	case <-ctx.Done():
-		return nil // 优雅停机：不返回错误，避免触发 errgroup 级联取消，只跳过未开始的任务
+		return nil
 	default:
 	}
 
-	albumName := album.Get("name").String()
 	sloc := photo.Get("sloc").String()
 	originalName := photo.Get("name").String()
 	if originalName == "" {
@@ -307,7 +368,6 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	loc, _ := time.LoadLocation("Local")
 	t, err := time.ParseInLocation("2006-01-02 15:04:05", shootTime, loc)
 	if err != nil {
-		// 如果解析失败，尝试解析上传时间
 		uploadTime := photo.Get("uploadtime").String()
 		t, _ = time.ParseInLocation("2006-01-02 15:04:05", uploadTime, loc)
 	}
@@ -322,15 +382,15 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		filenameDate = "00000000000000"
 	}
 
-	var tasks []struct {
+	type mediaTask struct {
 		url      string
 		filename string
 		isVideo  bool
 	}
 
+	var tasks []mediaTask
 	isVideo := photo.Get("is_video").Bool()
 
-	// 1. 获取图片组件信息
 	imgSource := photo.Get("raw").String()
 	if imgSource == "" {
 		imgSource = photo.Get("origin_url").String()
@@ -355,50 +415,32 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	}
 	imgFilename += ext
 
-	// 2. 获取视频组件信息 (针对 视频 和 实况图)
-	// 根据用户反馈，实况图在 QQ 空间本质上是以 MP4 格式存储的，因此将其视为视频处理
 	if isVideo {
-		videoURL, err := s.client.GetVideoDownloadURL(ctx, targetUin, album.Get("id").String(), sloc)
-		if err == nil && videoURL != "" {
+		videoURL, videoErr := s.client.GetVideoDownloadURL(ctx, targetUin, album.Get("id").String(), sloc)
+		if videoErr == nil && videoURL != "" {
 			vidFilename := fmt.Sprintf("VID_%s_%s_%s.mp4", filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
-			tasks = append(tasks, struct {
-				url      string
-				filename string
-				isVideo  bool
-			}{videoURL, vidFilename, true})
+			tasks = append(tasks, mediaTask{url: videoURL, filename: vidFilename, isVideo: true})
 		} else {
-			// 如果获取视频地址失败，则报错并继续
-			s.results.addFailedItem(FailedItem{
-				Album: albumName,
-				Name:  sloc,
-				Error: fmt.Sprintf("failed to get video download URL: %v", err),
-			})
-			return nil // 忽略单个视频错误，继续下载后续文件
+			s.results.addFailedItem(s.makeFailedItem(targetUin, album, photo, sloc, videoErr, true))
+			return nil
 		}
 	} else {
-		// 3. 纯图片任务
-		tasks = append(tasks, struct {
-			url      string
-			filename string
-			isVideo  bool
-		}{imgSource, imgFilename, false})
+		tasks = append(tasks, mediaTask{url: imgSource, filename: imgFilename, isVideo: false})
 	}
 
 	for _, task := range tasks {
 		isSkip := false
 		if exclude {
 			base := strings.TrimSuffix(task.filename, filepath.Ext(task.filename))
-			if p, ok := localFiles[base]; ok {
-				// 修正 task.filename 为本地已存在的实际文件名，确保 Download 能够正确识别并进行断点续传
-				task.filename = filepath.Base(p)
-				head, err := s.client.Http.Head(ctx, task.url, map[string]string{"cookie": s.client.Cookie})
-				if err == nil {
+			if existingPath, ok := localFiles[base]; ok {
+				task.filename = filepath.Base(existingPath)
+				head, headErr := s.client.Http.Head(ctx, task.url, map[string]string{"cookie": s.client.Cookie})
+				if headErr == nil {
 					cLen, _ := strconv.ParseInt(head.Get("Content-Length"), 10, 64)
-					fi, _ := os.Stat(p)
-					if cLen <= fi.Size() {
+					fi, _ := os.Stat(existingPath)
+					if cLen > 0 && fi != nil && cLen <= fi.Size() {
 						isSkip = true
 					}
-					// 注意：此处不再 os.Remove(p)，以保留文件给 http.go 进行断点续传
 				}
 			}
 		}
@@ -406,9 +448,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		if !isSkip {
 			savePath := albumPath
 			if s.config.EnableTimeline && shootDate != "" {
-				year := shootDate[:4]
-				month := shootDate[4:6]
-				savePath = filepath.Join(albumPath, year, month)
+				savePath = filepath.Join(albumPath, shootDate[:4], shootDate[4:6])
 				_ = os.MkdirAll(savePath, os.ModePerm)
 			}
 
@@ -428,39 +468,53 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 				headers["Sec-Fetch-Site"] = "cross-site"
 				headers["Range"] = "bytes=0-"
 
-				// 严格模拟 v1.0.0 的请求头，防止部分 CDN 节点校验 Host
-				if u, err := iurl.Parse(task.url); err == nil {
+				if u, parseErr := iurl.Parse(task.url); parseErr == nil {
 					headers["Host"] = u.Host
 				}
 			}
 
-			res, err := s.client.Http.Download(ctx, task.url, target, headers, 3, 600, p, task.filename, originalName)
-			// 如果是视频且下载失败（可能是因为 f0 链接 404，或者是大文件下载中途断流）
-			// 这里增加外层重试机制，支持大文件在龟速网络下被 CDN 强踢后的无限次（受限于 retry 参数）断点续传
-			if err != nil && task.isVideo {
-				// 如果是 404，尝试降级画质
-				if strings.Contains(err.Error(), "404") && strings.Contains(task.url, ".f0.mp4") {
+			downloadRetry := 3
+			if task.isVideo {
+				downloadRetry = 8
+			}
+
+			res, downloadErr := s.client.Http.Download(
+				ctx,
+				task.url,
+				target,
+				headers,
+				downloadRetry,
+				600,
+				p,
+				task.filename,
+				originalName,
+				s.trackWrittenBytes,
+			)
+
+			if downloadErr != nil && task.isVideo {
+				if strings.Contains(downloadErr.Error(), "404") && strings.Contains(task.url, ".f0.mp4") {
 					originalURL := strings.Replace(task.url, ".f0.mp4", ".f20.mp4", 1)
-					res, err = s.client.Http.Download(ctx, originalURL, target, headers, 3, 600, p, task.filename, originalName)
-				} else if strings.Contains(err.Error(), "connection broken") || strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "EOF") {
-					// 如果是因为网速太慢，被腾讯 CDN 主动断开连接 (TCP Reset / EOF)
-					// 我们需要进行休眠退避，然后重新发起请求（底层 Http.Download 会自动读取本地已下载的文件大小，并附带 Range 头）
-					s.logger.Warnf("网络波动导致 [%s] 下载中断，准备触发断点续传...", task.filename)
-					time.Sleep(3 * time.Second) // 稍微冷却一下，防止被彻底拉黑
-					// 再次发起下载，底层会自动补上 Range: bytes=已下载大小-
-					res, err = s.client.Http.Download(ctx, task.url, target, headers, 5, 600, p, task.filename, originalName)
+					res, downloadErr = s.client.Http.Download(
+						ctx,
+						originalURL,
+						target,
+						headers,
+						downloadRetry,
+						600,
+						p,
+						task.filename,
+						originalName,
+						s.trackWrittenBytes,
+					)
 				}
 			}
 
-			if err != nil {
-				s.results.addFailedItem(FailedItem{
-					Album: albumName,
-					Name:  task.filename,
-					Error: fmt.Sprintf("download failed: %v", err),
-				})
-				// 这里不直接 return，尝试下载该项目的其他部分（如果有）
+			if downloadErr != nil {
+				s.results.addFailedItem(s.makeFailedItem(targetUin, album, photo, task.filename, fmt.Errorf("download failed: %w", downloadErr), task.isVideo))
 				continue
-			} else if res != nil {
+			}
+
+			if res != nil {
 				if finalName, ok := res["filename"].(string); ok {
 					task.filename = finalName
 				}
@@ -473,20 +527,17 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		}
 		actualTarget := filepath.Join(finalSavePath, task.filename)
 
-		// 修复本地相册时间线 (OS Time 注入)
 		if !t.IsZero() {
-			if err := os.Chtimes(actualTarget, t, t); err != nil {
-				s.logger.Debugf("failed to set OS time for %s: %v", actualTarget, err)
+			if chtimesErr := os.Chtimes(actualTarget, t, t); chtimesErr != nil {
+				s.logger.Debugf("failed to set OS time for %s: %v", actualTarget, chtimesErr)
 			}
 		}
 
 		s.updateResults(isSkip, task.isVideo)
 
-		// 只在调试模式下输出详细日志
 		if s.logger.Level().Enabled(zap.DebugLevel) {
-			// 获取文件大小
 			fileSizeStr := "未知"
-			if fi, err := os.Stat(actualTarget); err == nil {
+			if fi, statErr := os.Stat(actualTarget); statErr == nil {
 				fileSizeStr = util.FormatBytes(fi.Size())
 			}
 
@@ -513,6 +564,63 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	}
 
 	return nil
+}
+
+func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {
+	baseDir := filepath.Join("storage", "qzone", targetUin, "album")
+	safeName := sanitizePath(albumName)
+	albumPath := filepath.Join(baseDir, safeName)
+
+	if err := os.MkdirAll(albumPath, os.ModePerm); err != nil {
+		albumPath = filepath.Join(baseDir, util.MD5(albumName)[8:24])
+		_ = os.MkdirAll(albumPath, os.ModePerm)
+	}
+
+	return albumPath
+}
+
+func (s *Spider) buildLocalFileIndex(albumPath string, exclude bool) map[string]string {
+	localFiles := make(map[string]string)
+	if exclude {
+		files, _ := util.ListFiles(albumPath)
+		for _, f := range files {
+			name := filepath.Base(f)
+			if idx := strings.LastIndex(name, "."); idx != -1 {
+				name = name[:idx]
+			}
+			localFiles[name] = f
+		}
+		return localFiles
+	}
+
+	_ = os.RemoveAll(albumPath)
+	_ = os.MkdirAll(albumPath, os.ModePerm)
+	return localFiles
+}
+
+func (s *Spider) makeFailedItem(targetUin string, album, photo gjson.Result, name string, err error, isVideo bool) FailedItem {
+	errMsg := "unknown error"
+	if err != nil {
+		errMsg = err.Error()
+	}
+
+	return FailedItem{
+		Album:     album.Get("name").String(),
+		Name:      name,
+		Error:     errMsg,
+		TargetUin: targetUin,
+		AlbumID:   album.Get("id").String(),
+		AlbumRaw:  album.Raw,
+		PhotoRaw:  photo.Raw,
+		IsVideo:   isVideo,
+	}
+}
+
+func (s *Spider) trackWrittenBytes(delta int64) {
+	if delta <= 0 {
+		return
+	}
+	atomic.AddUint64(&s.results.BytesDone, uint64(delta))
 }
 
 func (s *Spider) updateResults(isSkip, isVideo bool) {
