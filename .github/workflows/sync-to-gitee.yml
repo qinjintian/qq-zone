@@ -1,0 +1,38 @@
+name: Sync To Gitee
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  sync:
+    name: Mirror Repository To Gitee
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Gitee remote
+        run: |
+          git remote add gitee https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@${{ secrets.GITEE_REPO }}
+
+      - name: Sync GitHub main to Gitee master
+        if: github.ref_type == 'branch'
+        run: |
+          git push --force-with-lease gitee HEAD:master
+
+      - name: Sync tags to Gitee
+        if: github.ref_type == 'tag'
+        run: |
+          git push gitee --tags
