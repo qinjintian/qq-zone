@@ -12,7 +12,7 @@ jobs:
   sync:
     name: Mirror Repository To Gitee
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - name: Checkout code
