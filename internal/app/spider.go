@@ -227,6 +227,13 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 
 	atomic.AddUint64(&s.results.Total, uint64(len(photos)))
 
+	// 空相册没有可下载的照片，直接返回，避免创建 total=0 的进度条。
+	// mpb 会把 total<=0 视为“未知总量”，该进度条永远不会被标记为完成，
+	// 导致外层 Download 里的 p.Wait() 永久阻塞，任务记录也一直停留在 pending。
+	if len(photos) == 0 {
+		return nil
+	}
+
 	albumBar := p.AddBar(int64(len(photos)),
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
