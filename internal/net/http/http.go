@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,6 +55,76 @@ type resumeMetadata struct {
 type progressReader struct {
 	reader     io.Reader
 	onProgress func(int64)
+}
+
+// StatusError 表示远端以明确 HTTP 状态码拒绝了这次下载。
+type StatusError struct {
+	Code   int
+	Status string
+}
+
+func (e *StatusError) Error() string {
+	if e == nil {
+		return "download failed with status: unknown"
+	}
+	return fmt.Sprintf("download failed with status: %s", e.Status)
+}
+
+// HTTPStatus 从错误中提取 HTTP 状态码；无法识别时返回 0。
+func HTTPStatus(err error) int {
+	var se *StatusError
+	if errors.As(err, &se) && se != nil {
+		return se.Code
+	}
+	return 0
+}
+
+// IsDeadURL 判断该错误是否表示“这条 URL 本身不可用”，应立即换源而不是当作风控重试。
+func IsDeadURL(err error) bool {
+	switch HTTPStatus(err) {
+	case http.StatusForbidden, http.StatusNotFound, http.StatusGone, http.StatusUnavailableForLegalReasons:
+		return true
+	default:
+		if err == nil {
+			return false
+		}
+		msg := err.Error()
+		return strings.Contains(msg, "403") ||
+			strings.Contains(msg, "404") ||
+			strings.Contains(msg, "410") ||
+			strings.Contains(msg, "Forbidden") ||
+			strings.Contains(msg, "Not Found")
+	}
+}
+
+type downloadOptions struct {
+	fatalStatuses map[int]bool
+}
+
+// DownloadOption 用于微调单次下载行为。
+type DownloadOption func(*downloadOptions)
+
+// WithFatalStatuses 指定遇到这些状态码时立即失败、不再退避重试。
+// 视频多源兜底会把 403/404 视为当前 URL 失效，从而立刻切换到播放链。
+func WithFatalStatuses(codes ...int) DownloadOption {
+	return func(o *downloadOptions) {
+		if o.fatalStatuses == nil {
+			o.fatalStatuses = make(map[int]bool, len(codes))
+		}
+		for _, code := range codes {
+			o.fatalStatuses[code] = true
+		}
+	}
+}
+
+func applyDownloadOptions(opts []DownloadOption) downloadOptions {
+	var o downloadOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
 }
 
 func (r *progressReader) Read(p []byte) (int, error) {
@@ -150,7 +221,8 @@ func (c *Client) PostForm(ctx context.Context, url string, params map[string]str
 
 // Download 执行大文件流式下载任务。
 // onProgress 会在每次成功读取到响应体字节后回调，用于上层吞吐量统计。
-func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string, onProgress func(int64)) (res map[string]interface{}, err error) {
+func (c *Client) Download(ctx context.Context, uri string, target string, headers map[string]string, retry int, timeout int, p *mpb.Progress, name string, originalName string, onProgress func(int64), opts ...DownloadOption) (res map[string]interface{}, err error) {
+	dopts := applyDownloadOptions(opts)
 	targetDir := filepath.Dir(target)
 	if !util.IsDir(targetDir) {
 		if mkdirErr := os.MkdirAll(targetDir, os.ModePerm); mkdirErr != nil {
@@ -172,6 +244,14 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 
 		metaPath := resumeMetadataPath(currentTarget)
 		meta, _ := loadResumeMetadata(metaPath)
+
+		// 换源下载时本地残留的是另一条 URL 的半成品，不能接着 Range，否则会把两种码流拼在一起。
+		if startBytes > 0 && (meta == nil || meta.URI != uri) {
+			_ = os.Remove(currentTarget)
+			_ = removeResumeMetadata(metaPath)
+			startBytes = 0
+			meta = nil
+		}
 
 		req := c.resty.R().
 			SetContext(context.WithoutCancel(ctx)).
@@ -219,7 +299,10 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 
 		if statusCode != http.StatusOK && statusCode != http.StatusPartialContent {
 			rawBody.Close()
-			err = fmt.Errorf("download failed with status: %s", resp.Status())
+			err = &StatusError{Code: statusCode, Status: resp.Status()}
+			if dopts.fatalStatuses[statusCode] {
+				return nil, err
+			}
 			if attempt < maxAttempts-1 {
 				isRiskControl := statusCode == http.StatusForbidden || statusCode == http.StatusTooManyRequests || statusCode == http.StatusServiceUnavailable
 				if waitErr := c.waitRetry(ctx, p, attempt, currentName, isRiskControl); waitErr != nil {

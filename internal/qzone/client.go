@@ -312,68 +312,6 @@ func (c *Client) GetPhotoList(ctx context.Context, targetUin string, albumID str
 	return allPhotos, nil
 }
 
-// GetVideoDownloadURL 获取指定视频或实况图的真实下载直链
-// 对于 MP4 视频或实况图，QQ 空间需要通过该专用接口获取带有 token 的真实下载地址
-func (c *Client) GetVideoDownloadURL(ctx context.Context, targetUin string, albumID string, sloc string) (string, error) {
-	headers := map[string]string{
-		"cookie":     c.Cookie,
-		"user-agent": UserAgent,
-		"referer":    fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin),
-	}
-
-	apiURL := fmt.Sprintf("https://h5.qzone.qq.com/proxy/domain/photo.qzone.qq.com/fcgi-bin/cgi_floatview_photo_list_v2?g_tk=%v&callback=viewer_Callback&topicId=%v&picKey=%v&cmtOrder=1&fupdate=1&plat=qzone&source=qzone&cmtNum=0&inCharset=utf-8&outCharset=utf-8&callbackFun=viewer&uin=%v&hostUin=%v&appid=4&isFirst=1", c.GTK, albumID, sloc, c.QQ, targetUin)
-
-	start := time.Now()
-	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
-	duration := time.Since(start)
-
-	bodyStr := string(body)
-	c.logAPI("GetVideoDownloadURL", apiURL, headers, bodyStr, code, duration, err)
-
-	if err != nil {
-		return "", err
-	}
-	if code != 200 {
-		return "", fmt.Errorf("failed to fetch video download url: status code %d", code)
-	}
-
-	data, err := parseJSONP(bodyStr, "viewer_Callback")
-	if err != nil {
-		return "", fmt.Errorf("failed to parse video response: %w (raw body: %s)", err, bodyStr)
-	}
-
-	res := gjson.Parse(data)
-	photos := res.Get("data.photos").Array()
-	if len(photos) == 0 {
-		return "", fmt.Errorf("no video found in response")
-	}
-
-	video := photos[res.Get("data.picPosInPage").Int()]
-	vInfo := video.Get("video_info")
-
-	// 优先获取 download_url 或 video_url，只要有链接就尝试下载，忽略 status 限制
-	downloadURL := vInfo.Get("download_url").String()
-	if downloadURL == "" {
-		downloadURL = vInfo.Get("video_url").String()
-	}
-
-	// 如果仍然为空，且状态不为 2，才报错
-	if downloadURL == "" && vInfo.Get("status").Int() != 2 {
-		return "", fmt.Errorf("video is not ready and no URL found (status: %d, video_info: %s)", vInfo.Get("status").Int(), vInfo.Raw)
-	}
-
-	// 尝试获取高清地址，但保留原始地址作为备份
-	finalURL := downloadURL
-	if strings.Contains(downloadURL, ".f20.mp4") {
-		highResURL := strings.Replace(downloadURL, ".f20.mp4", ".f0.mp4", 1)
-		// 检查高清地址是否可用（发送一个 HEAD 请求）
-		// 注意：如果 HEAD 请求太慢或被封，可能需要直接在下载逻辑里做重试
-		finalURL = highResURL
-	}
-
-	return finalURL, nil
-}
-
 // GetFriendList 获取当前用户的所有好友列表
 // 并并发检测每个好友的空间访问权限 (是否对我开放)
 func (c *Client) GetFriendList(ctx context.Context) ([]gjson.Result, error) {
