@@ -32,9 +32,29 @@ jobs:
       - name: Sync GitHub main to Gitee master
         if: github.ref_type == 'branch'
         run: |
-          git push --force --progress gitee HEAD:master
+          for i in 1 2 3; do
+            if git push --force --progress gitee HEAD:master; then
+              exit 0
+            fi
+            echo "Gitee 分支同步失败（第 ${i} 次），30 秒后重试..."
+            sleep 30
+          done
+          exit 1
 
       - name: Sync tags to Gitee
         if: github.ref_type == 'tag'
         run: |
-          git push --progress gitee --tags
+          tag="${GITHUB_REF_NAME}"
+          if git ls-remote --exit-code --tags gitee "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Gitee 已存在 tag ${tag}，跳过"
+            exit 0
+          fi
+          echo "推送当前 tag: ${tag}"
+          for i in 1 2 3; do
+            if git push --progress gitee "refs/tags/${tag}:refs/tags/${tag}"; then
+              exit 0
+            fi
+            echo "推送 ${tag} 失败（第 ${i} 次），30 秒后重试..."
+            sleep 30
+          done
+          exit 1
