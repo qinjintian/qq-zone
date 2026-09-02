@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-09-01
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-01 15:40:00
+ * @LastEditTime: 2026-09-02 17:50:00
  * @FileName: hls.go
  * @Description: [HLS/m3u8 播放链兜底下载，用于 download_url 失效时按网页播放器同样的分片方式拉取视频]
  */
@@ -46,11 +46,12 @@ func IsHLSURL(raw string) bool {
 
 // DownloadHLS 下载 m3u8 播放列表及其分片，并按顺序拼接为本地文件。
 // 若远端实际返回的不是播放列表（例如仍是 mp4），则回退到普通 Download。
-func (c *Client) DownloadHLS(ctx context.Context, playlistURL, target string, headers map[string]string, p *mpb.Progress, name, originalName string, onProgress func(int64)) (map[string]interface{}, error) {
-	return c.downloadHLS(ctx, playlistURL, target, headers, p, name, originalName, onProgress, 0)
+func (c *Client) DownloadHLS(ctx context.Context, playlistURL, target string, headers map[string]string, p *mpb.Progress, name, originalName string, onProgress func(int64), opts ...DownloadOption) (map[string]interface{}, error) {
+	return c.downloadHLS(ctx, playlistURL, target, headers, p, name, originalName, onProgress, 0, opts...)
 }
 
-func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, headers map[string]string, p *mpb.Progress, name, originalName string, onProgress func(int64), depth int) (map[string]interface{}, error) {
+func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, headers map[string]string, p *mpb.Progress, name, originalName string, onProgress func(int64), depth int, opts ...DownloadOption) (map[string]interface{}, error) {
+	dopts := applyDownloadOptions(opts)
 	if depth > 3 {
 		return nil, fmt.Errorf("hls playlist nested too deep")
 	}
@@ -69,7 +70,11 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 			contentType = respHeader.Get("Content-Type")
 		}
 		if !strings.Contains(strings.ToLower(contentType), "mpegurl") {
-			return c.Download(ctx, playlistURL, target, headers, 2, 600, p, name, originalName, onProgress, WithFatalStatuses(http.StatusForbidden, http.StatusNotFound, http.StatusGone))
+			dlOpts := []DownloadOption{WithFatalStatuses(http.StatusForbidden, http.StatusNotFound, http.StatusGone)}
+			if dopts.barLabel != "" {
+				dlOpts = append(dlOpts, WithBarLabel(dopts.barLabel))
+			}
+			return c.Download(ctx, playlistURL, target, headers, 2, 600, p, name, originalName, onProgress, dlOpts...)
 		}
 		return nil, fmt.Errorf("invalid m3u8 playlist")
 	}
@@ -87,7 +92,7 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 				best = v
 			}
 		}
-		return c.downloadHLS(ctx, best.url, target, headers, p, name, originalName, onProgress, depth+1)
+		return c.downloadHLS(ctx, best.url, target, headers, p, name, originalName, onProgress, depth+1, opts...)
 	}
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("m3u8 playlist has no segments")
@@ -123,7 +128,7 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 			mpb.BarRemoveOnComplete(),
 			mpb.PrependDecorators(
 				decor.Name(fmt.Sprintf("原文件: %s -> 保存为: %s", originalName, name), decor.WC{W: 55, C: decor.DindentRight}),
-				decor.Name("  HLS "),
+				decor.Name(progressSourceTag(dopts.barLabel, "  HLS ")),
 				decor.CountersNoUnit("%d / %d"),
 			),
 			mpb.AppendDecorators(

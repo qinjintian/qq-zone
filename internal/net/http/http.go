@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-14 16:30:00
+ * @LastEditTime: 2026-09-02 17:50:00
  * @FileName: http.go
  * @Description: [定制化 HTTP 客户端封装，支持带进度的大文件下载、安全续传与通用 GET/POST 请求]
  */
@@ -99,6 +99,7 @@ func IsDeadURL(err error) bool {
 
 type downloadOptions struct {
 	fatalStatuses map[int]bool
+	barLabel      string
 }
 
 // DownloadOption 用于微调单次下载行为。
@@ -115,6 +116,23 @@ func WithFatalStatuses(codes ...int) DownloadOption {
 			o.fatalStatuses[code] = true
 		}
 	}
+}
+
+// WithBarLabel 在进度条上标注当前拉取链路，例如 down / play / hls / getinfo。
+func WithBarLabel(label string) DownloadOption {
+	return func(o *downloadOptions) {
+		o.barLabel = strings.TrimSpace(label)
+	}
+}
+
+func progressSourceTag(label, fallback string) string {
+	if label != "" {
+		return fmt.Sprintf("  [%s] ", label)
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "  "
 }
 
 func applyDownloadOptions(opts []DownloadOption) downloadOptions {
@@ -386,7 +404,7 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 				mpb.BarRemoveOnComplete(),
 				mpb.PrependDecorators(
 					decor.Name(fmt.Sprintf("原文件: %s -> 保存为: %s", originalName, currentName), decor.WC{W: 55, C: decor.DindentRight}),
-					decor.Name("  "),
+					decor.Name(progressSourceTag(dopts.barLabel, "")),
 					decor.OnComplete(decor.Name("进度: "), "进度: "),
 					decor.CountersKibiByte("% .2f / % .2f"),
 				),

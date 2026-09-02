@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-14 16:30:00
+ * @LastEditTime: 2026-09-02 17:50:00
  * @FileName: spider.go
  * @Description: [QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度]
  */
@@ -83,6 +83,9 @@ type Spider struct {
 	logger    *zap.SugaredLogger
 
 	results DownloadResult
+
+	debugMu    sync.Mutex
+	debugLines []string
 }
 
 type mediaTask struct {
@@ -134,6 +137,8 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 		filteredAlbums = append(filteredAlbums, album)
 	}
 
+	s.resetVideoDebugLogs()
+	s.logVideoDebugHint()
 	p := mpb.NewWithContext(ctx)
 
 	for i, album := range filteredAlbums {
@@ -141,6 +146,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 		case <-ctx.Done():
 			s.logger.Warn("任务已被用户取消")
 			p.Wait()
+			s.flushVideoDebugLogs()
 			return &s.results, nil
 		default:
 		}
@@ -151,6 +157,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	}
 
 	p.Wait()
+	s.flushVideoDebugLogs()
 	return &s.results, nil
 }
 
@@ -163,6 +170,8 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 	}
 
 	atomic.StoreUint64(&s.results.Total, uint64(len(failedItems)))
+	s.resetVideoDebugLogs()
+	s.logVideoDebugHint()
 	p := mpb.NewWithContext(ctx)
 	retryBar := p.AddBar(int64(len(failedItems)),
 		mpb.BarRemoveOnComplete(),
@@ -182,6 +191,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		select {
 		case <-ctx.Done():
 			p.Wait()
+			s.flushVideoDebugLogs()
 			return &s.results, nil
 		default:
 		}
@@ -214,7 +224,9 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		retryBar.Increment()
 	}
 
+	retryBar.SetTotal(-1, true)
 	p.Wait()
+	s.flushVideoDebugLogs()
 	return &s.results, nil
 }
 
@@ -359,7 +371,10 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		})
 	}
 
-	return g.Wait()
+	waitErr := g.Wait()
+	albumBar.SetCurrent(int64(len(photos)))
+	albumBar.SetTotal(int64(len(photos)), true)
+	return waitErr
 }
 
 // downloadItem 负责处理单个文件 (照片/实况图/普通视频) 的分析、路径拼接、断点续传检查与下载调用。
@@ -448,6 +463,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 
 	for _, task := range tasks {
 		isSkip := false
+		var route videoRoute
 		if exclude {
 			base := strings.TrimSuffix(task.filename, filepath.Ext(task.filename))
 			if existingPath, ok := localFiles[base]; ok {
@@ -466,9 +482,13 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 			}
 
 			target := filepath.Join(savePath, task.filename)
-			res, downloadErr := s.downloadMedia(ctx, p, targetUin, task, target, originalName)
+			res, downloadedRoute, downloadErr := s.downloadMedia(ctx, p, targetUin, task, target, originalName)
+			route = downloadedRoute
 
 			if downloadErr != nil {
+				if task.isVideo {
+					s.logVideoSourceResult(route, originalName, task.filename, "", downloadErr)
+				}
 				s.results.addFailedItem(s.makeFailedItem(targetUin, album, photo, task.filename, fmt.Errorf("download failed: %w", downloadErr), task.isVideo))
 				continue
 			}
@@ -494,7 +514,9 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 
 		s.updateResults(isSkip, task.isVideo)
 
-		if s.logger.Level().Enabled(zap.DebugLevel) {
+		if !isSkip && task.isVideo {
+			s.logVideoSourceResult(route, originalName, task.filename, actualTarget, nil)
+		} else if s.logger.Level().Enabled(zap.DebugLevel) {
 			fileSizeStr := "未知"
 			if fi, statErr := os.Stat(actualTarget); statErr == nil {
 				fileSizeStr = util.FormatBytes(fi.Size())
@@ -546,8 +568,19 @@ func (s *Spider) shouldSkipExisting(ctx context.Context, existingPath string, ca
 	return false
 }
 
-func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin string, task mediaTask, target, originalName string) (map[string]interface{}, error) {
+type videoSourceAttempt struct {
+	kind string
+	err  error
+}
+
+type videoRoute struct {
+	winner string
+	failed []videoSourceAttempt
+}
+
+func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin string, task mediaTask, target, originalName string) (map[string]interface{}, videoRoute, error) {
 	candidates := append([]qzone.VideoCandidate(nil), task.candidates...)
+	route := videoRoute{}
 	var (
 		res     map[string]interface{}
 		lastErr error
@@ -555,32 +588,33 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 		triedID bool
 	)
 
-	for i := 0; i < len(candidates); i++ {
-		cand := candidates[i]
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		if cand.Kind == qzone.VideoSourceGetInfo {
-			continue
-		}
-
+	tryOne := func(cand qzone.VideoCandidate) (map[string]interface{}, error) {
 		kind := cand.Kind
 		if kind == "" {
 			kind = "unknown"
 		}
-		res, lastErr = s.downloadCandidate(ctx, p, targetUin, cand, target, task.filename, originalName, task.isVideo)
-		if lastErr == nil {
-			if kind != qzone.VideoSourceDownload && task.isVideo {
-				s.logger.Debugf("video fallback succeeded via %s for %s", kind, originalName)
-			}
-			return res, nil
+		out, err := s.downloadCandidate(ctx, p, targetUin, cand, target, task.filename, originalName, task.isVideo)
+		if err != nil {
+			route.failed = append(route.failed, videoSourceAttempt{kind: kind, err: err})
+			tried = append(tried, fmt.Sprintf("%s: %v", kind, err))
+			s.logger.Debugf("video source %s failed for %s: %v", kind, originalName, err)
+			return nil, err
+		}
+		route.winner = kind
+		return out, nil
+	}
+
+	for i := 0; i < len(candidates); i++ {
+		select {
+		case <-ctx.Done():
+			return nil, route, ctx.Err()
+		default:
 		}
 
-		tried = append(tried, fmt.Sprintf("%s: %v", kind, lastErr))
-		s.logger.Debugf("video source %s failed for %s: %v", kind, originalName, lastErr)
+		res, lastErr = tryOne(candidates[i])
+		if lastErr == nil {
+			return res, route, nil
+		}
 
 		if task.isVideo && !triedID && task.videoID != "" && ihttp.IsDeadURL(lastErr) && i == len(candidates)-1 {
 			triedID = true
@@ -591,26 +625,24 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 
 	if task.isVideo && !triedID && task.videoID != "" {
 		for _, extra := range s.client.ResolveTencentVideo(ctx, task.videoID) {
-			res, lastErr = s.downloadCandidate(ctx, p, targetUin, extra, target, task.filename, originalName, true)
+			res, lastErr = tryOne(extra)
 			if lastErr == nil {
-				s.logger.Debugf("video fallback succeeded via getinfo for %s", originalName)
-				return res, nil
+				return res, route, nil
 			}
-			tried = append(tried, fmt.Sprintf("%s: %v", extra.Kind, lastErr))
 		}
 	}
 
 	if lastErr == nil {
-		return nil, fmt.Errorf("no downloadable url")
+		return nil, route, fmt.Errorf("no downloadable url")
 	}
 	if len(tried) <= 1 {
-		return nil, lastErr
+		return nil, route, lastErr
 	}
-	return nil, fmt.Errorf("all %d sources failed; last: %w; tried: %s", len(tried), lastErr, strings.Join(tried, " | "))
+	return nil, route, fmt.Errorf("all %d sources failed; last: %w; tried: %s", len(tried), lastErr, strings.Join(tried, " | "))
 }
 
 func (s *Spider) downloadCandidate(ctx context.Context, p *mpb.Progress, targetUin string, cand qzone.VideoCandidate, target, filename, originalName string, isVideo bool) (map[string]interface{}, error) {
-	headers := s.buildDownloadHeaders(targetUin, cand.URL, isVideo)
+	headers := s.buildDownloadHeaders(targetUin, cand.URL, isVideo, cand.Kind)
 	res, err := s.doDownload(ctx, p, cand, target, filename, originalName, headers, isVideo)
 	if err != nil && isVideo && ihttp.IsDeadURL(err) && headers["cookie"] != "" {
 		// 部分播放 CDN 不接受跨域 Cookie，去掉后再试一次，更接近浏览器播放请求。
@@ -622,12 +654,12 @@ func (s *Spider) downloadCandidate(ctx context.Context, p *mpb.Progress, targetU
 }
 
 func (s *Spider) doDownload(ctx context.Context, p *mpb.Progress, cand qzone.VideoCandidate, target, filename, originalName string, headers map[string]string, isVideo bool) (map[string]interface{}, error) {
+	opts := s.videoBarOptions(cand, isVideo)
 	if cand.Kind == qzone.VideoSourceHLS || ihttp.IsHLSURL(cand.URL) {
-		return s.client.Http.DownloadHLS(ctx, cand.URL, target, headers, p, filename, originalName, s.trackWrittenBytes)
+		return s.client.Http.DownloadHLS(ctx, cand.URL, target, headers, p, filename, originalName, s.trackWrittenBytes, opts...)
 	}
 
 	retry := 3
-	opts := []ihttp.DownloadOption{}
 	if isVideo {
 		retry = 2
 		opts = append(opts, ihttp.WithFatalStatuses(
@@ -652,7 +684,14 @@ func (s *Spider) doDownload(ctx context.Context, p *mpb.Progress, cand qzone.Vid
 	)
 }
 
-func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool) map[string]string {
+func (s *Spider) videoBarOptions(cand qzone.VideoCandidate, isVideo bool) []ihttp.DownloadOption {
+	if !s.debugVideoEnabled() || !isVideo || cand.Kind == "" || cand.Kind == "image" {
+		return nil
+	}
+	return []ihttp.DownloadOption{ihttp.WithBarLabel(videoSourceTag(cand.Kind))}
+}
+
+func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool, kind string) map[string]string {
 	headers := map[string]string{
 		"cookie":     s.client.Cookie,
 		"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -660,7 +699,11 @@ func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool) ma
 	if !isVideo {
 		return headers
 	}
-	headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
+	if kind == qzone.VideoSourceGetInfo {
+		headers["Referer"] = "https://v.qq.com/"
+	} else {
+		headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
+	}
 	headers["Accept"] = "*/*"
 	headers["Accept-Encoding"] = "identity;q=1, *;q=0"
 	headers["Connection"] = "keep-alive"
@@ -680,6 +723,176 @@ func cloneHeaders(src map[string]string) map[string]string {
 		dst[k] = v
 	}
 	return dst
+}
+
+func (s *Spider) debugVideoEnabled() bool {
+	return s.config != nil && s.config.EnableDebug
+}
+
+func (s *Spider) resetVideoDebugLogs() {
+	s.debugMu.Lock()
+	s.debugLines = nil
+	s.debugMu.Unlock()
+}
+
+func (s *Spider) enqueueVideoDebugLog(line string) {
+	s.debugMu.Lock()
+	s.debugLines = append(s.debugLines, line)
+	s.debugMu.Unlock()
+}
+
+func (s *Spider) flushVideoDebugLogs() {
+	s.debugMu.Lock()
+	lines := s.debugLines
+	s.debugLines = nil
+	s.debugMu.Unlock()
+	for _, line := range lines {
+		s.logger.Info(line)
+	}
+}
+
+func (s *Spider) logVideoDebugHint() {
+	if !s.debugVideoEnabled() {
+		return
+	}
+	s.logger.Info(fmt.Sprintf("🔍 调试模式：视频将标注实际拉取链路  %s %s %s %s",
+		colorVideoSource(qzone.VideoSourceDownload, "["+videoSourceTag(qzone.VideoSourceDownload)+"]"),
+		colorVideoSource(qzone.VideoSourcePlay, "[play]"),
+		colorVideoSource(qzone.VideoSourceHLS, "[hls]"),
+		colorVideoSource(qzone.VideoSourceGetInfo, "[getinfo]"),
+	))
+}
+
+func (s *Spider) logVideoSourceResult(route videoRoute, originalName, filename, filePath string, downloadErr error) {
+	if !s.debugVideoEnabled() {
+		return
+	}
+
+	gray := color.New(color.FgWhite, color.Faint).SprintFunc()
+	yellow := color.New(color.FgYellow).SprintFunc()
+	cyan := color.New(color.FgCyan).SprintFunc()
+	green := color.New(color.FgGreen).SprintFunc()
+	red := color.New(color.FgRed, color.Bold).SprintFunc()
+	chain := formatVideoFallbackChain(route.failed)
+
+	if downloadErr != nil {
+		tried := chain
+		if tried == "" {
+			tried = downloadErr.Error()
+		}
+		s.enqueueVideoDebugLog(fmt.Sprintf("🎬 %s  原文件: %s  已尝试: %s",
+			red("视频拉取失败"),
+			cyan(originalName),
+			gray(tried),
+		))
+		return
+	}
+
+	sizeStr := "未知"
+	if filePath != "" {
+		if fi, err := os.Stat(filePath); err == nil {
+			sizeStr = util.FormatBytes(fi.Size())
+		}
+	}
+
+	winner := route.winner
+	if winner == "" {
+		winner = "unknown"
+	}
+	fallback := ""
+	if chain != "" {
+		fallback = "  " + gray("↩ "+chain)
+	}
+
+	s.enqueueVideoDebugLog(fmt.Sprintf("🎬 %s %s  原文件: %s → %s  (%s)%s",
+		colorVideoSource(winner, "["+videoSourceTag(winner)+"]"),
+		videoSourceTitle(winner),
+		cyan(originalName),
+		yellow(filename),
+		green(sizeStr),
+		fallback,
+	))
+}
+
+func videoSourceTag(kind string) string {
+	switch kind {
+	case qzone.VideoSourceDownload:
+		return "down"
+	case "":
+		return "unknown"
+	default:
+		return kind
+	}
+}
+
+func videoSourceTitle(kind string) string {
+	switch kind {
+	case qzone.VideoSourceDownload:
+		return "下载链"
+	case qzone.VideoSourcePlay:
+		return "播放链"
+	case qzone.VideoSourceHLS:
+		return "HLS"
+	case qzone.VideoSourceGetInfo:
+		return "vid 解析"
+	default:
+		if kind == "" {
+			return "未知"
+		}
+		return kind
+	}
+}
+
+func colorVideoSource(kind, text string) string {
+	switch kind {
+	case qzone.VideoSourceDownload:
+		return color.New(color.FgGreen, color.Bold).Sprint(text)
+	case qzone.VideoSourcePlay:
+		return color.New(color.FgCyan, color.Bold).Sprint(text)
+	case qzone.VideoSourceHLS:
+		return color.New(color.FgMagenta, color.Bold).Sprint(text)
+	case qzone.VideoSourceGetInfo:
+		return color.New(color.FgYellow, color.Bold).Sprint(text)
+	default:
+		return color.New(color.Bold).Sprint(text)
+	}
+}
+
+func formatVideoFallbackChain(failed []videoSourceAttempt) string {
+	var parts []string
+	last := ""
+	for _, a := range failed {
+		kind := a.kind
+		if kind == "" {
+			kind = "unknown"
+		}
+		part := videoSourceTag(kind)
+		if reason := shortVideoErr(a.err); reason != "" {
+			part += " " + reason
+		}
+		if part == last {
+			continue
+		}
+		last = part
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, " → ")
+}
+
+func shortVideoErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	if code := ihttp.HTTPStatus(err); code > 0 {
+		return strconv.Itoa(code)
+	}
+	msg := strings.TrimSpace(err.Error())
+	msg = strings.TrimPrefix(msg, "download failed: ")
+	msg = strings.TrimPrefix(msg, "hls segment download failed: ")
+	if len(msg) > 48 {
+		return msg[:48] + "…"
+	}
+	return msg
 }
 
 func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {

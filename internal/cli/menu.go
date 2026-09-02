@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
+ * @LastEditTime: 2026-09-02 17:50:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -159,7 +159,7 @@ func (c *CLI) Menu(ctx context.Context) {
 					if c.logFact.IsDebug() {
 						status = "开启"
 					}
-					return fmt.Sprintf("控制是否记录详细的 API 请求日志 (当前: %s)", status)
+					return fmt.Sprintf("记录 API 日志，并在备份时标注视频拉取链路 (当前: %s)", status)
 				case 5:
 					return "注销当前登录状态，并准备扫码登录新账号"
 				case 6:
@@ -339,7 +339,7 @@ func (c *CLI) handleDebugToggle() {
 	if newStatus {
 		statusStr = color.GreenString("已开启")
 	}
-	c.logger.Infof("⚙️  调试模式 (API 日志) %s", statusStr)
+	c.logger.Infof("⚙️  调试模式 %s  （API 日志 + 视频链路标注）", statusStr)
 
 	// 如果已经登录，需要重新创建 client 的 APILogger
 	if c.client != nil {
