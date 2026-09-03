@@ -2,6 +2,12 @@ name: Sync To Gitee
 
 on:
   workflow_dispatch:
+    inputs:
+      sync_all_tags:
+        description: "全量同步历史 v* tag（Gitee 已存在的跳过）"
+        required: false
+        type: boolean
+        default: false
   push:
     branches:
       - main
@@ -12,7 +18,7 @@ jobs:
   sync:
     name: Mirror Repository To Gitee
     runs-on: ubuntu-latest
-    timeout-minutes: 1440
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sync_all_tags == 'true' && 180 || 20 }}
 
     steps:
       - name: Checkout code
@@ -30,10 +36,11 @@ jobs:
           git remote add gitee https://${{ secrets.GITEE_USERNAME }}:${{ secrets.GITEE_TOKEN }}@${{ secrets.GITEE_REPO }}
 
       - name: Sync GitHub main to Gitee master
-        if: github.ref_type == 'branch'
+        if: github.event_name == 'workflow_dispatch' || github.ref_type == 'branch'
         run: |
+          git fetch origin main --prune
           for i in 1 2 3; do
-            if git push --force --progress gitee HEAD:master; then
+            if git push --force --progress gitee origin/main:master; then
               exit 0
             fi
             echo "Gitee 分支同步失败（第 ${i} 次），30 秒后重试..."
@@ -41,7 +48,7 @@ jobs:
           done
           exit 1
 
-      - name: Sync tags to Gitee
+      - name: Sync current tag to Gitee
         if: github.ref_type == 'tag'
         run: |
           tag="${GITHUB_REF_NAME}"
@@ -58,3 +65,34 @@ jobs:
             sleep 30
           done
           exit 1
+
+      - name: Sync all missing tags to Gitee
+        if: github.event_name == 'workflow_dispatch' && inputs.sync_all_tags
+        run: |
+          remote_tags="$(git ls-remote --tags gitee | awk '{print $2}' | sed 's/\^{}$//' | sort -u)"
+          pushed=0
+          skipped=0
+          while IFS= read -r tag; do
+            [ -z "${tag}" ] && continue
+            if printf '%s\n' "${remote_tags}" | grep -qx "refs/tags/${tag}"; then
+              echo "Gitee 已存在 tag ${tag}，跳过"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            echo "推送历史 tag: ${tag}"
+            ok=0
+            for i in 1 2 3; do
+              if git push --progress gitee "refs/tags/${tag}:refs/tags/${tag}"; then
+                ok=1
+                pushed=$((pushed + 1))
+                break
+              fi
+              echo "推送 ${tag} 失败（第 ${i} 次），30 秒后重试..."
+              sleep 30
+            done
+            if [ "${ok}" -ne 1 ]; then
+              echo "推送 tag ${tag} 失败"
+              exit 1
+            fi
+          done < <(git tag -l 'v*')
+          echo "全量 tag 同步完成：新增 ${pushed} 个，跳过 ${skipped} 个"
