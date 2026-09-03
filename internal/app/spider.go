@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-02 17:50:00
+ * @LastEditTime: 2026-09-03 11:15:00
  * @FileName: spider.go
  * @Description: [QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度]
  */
@@ -84,13 +84,25 @@ type Spider struct {
 
 	results DownloadResult
 
-	debugMu    sync.Mutex
-	debugLines []string
+	debugMu    sync.Mutex      // 保护下面调试日志队列和链路计数，下载协程会并发写入
+	debugLines []string        // 回退/失败明细，等当前相册进度条结束后再打印，避免和 mpb 抢终端
+	albumStats videoDebugStats // 当前相册内各视频链路的命中次数
+	taskStats  videoDebugStats // 整次备份任务的链路命中次数，用于最后一行「全部视频」汇总
+}
+
+// videoDebugStats 统计调试模式下各视频实际走了哪条拉取链路。
+type videoDebugStats struct {
+	down, play, hls, getinfo, fail uint64
+}
+
+// videos 返回计入统计的视频条数（含失败）。
+func (st videoDebugStats) videos() uint64 {
+	return st.down + st.play + st.hls + st.getinfo + st.fail
 }
 
 type mediaTask struct {
-	candidates []qzone.VideoCandidate
-	videoID    string
+	candidates []qzone.VideoCandidate // 按优先级排列的下载地址：download → play → hls，getinfo 后补
+	videoID    string                 // 腾讯视频 vid，下载链和播放链都失效时用来换 CDN
 	filename   string
 	isVideo    bool
 }
@@ -137,6 +149,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 		filteredAlbums = append(filteredAlbums, album)
 	}
 
+	// 调试模式：任务开始打印图例，相册结束打回退明细和汇总，全部结束后再打总汇总。
 	s.resetVideoDebugLogs()
 	s.logVideoDebugHint()
 	p := mpb.NewWithContext(ctx)
@@ -147,6 +160,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 			s.logger.Warn("任务已被用户取消")
 			p.Wait()
 			s.flushVideoDebugLogs()
+			s.flushTaskVideoSummary()
 			return &s.results, nil
 		default:
 		}
@@ -158,6 +172,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 
 	p.Wait()
 	s.flushVideoDebugLogs()
+	s.flushTaskVideoSummary()
 	return &s.results, nil
 }
 
@@ -192,6 +207,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		case <-ctx.Done():
 			p.Wait()
 			s.flushVideoDebugLogs()
+			s.flushTaskVideoSummary()
 			return &s.results, nil
 		default:
 		}
@@ -227,6 +243,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 	retryBar.SetTotal(-1, true)
 	p.Wait()
 	s.flushVideoDebugLogs()
+	s.flushTaskVideoSummary()
 	return &s.results, nil
 }
 
@@ -235,6 +252,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	albumName := album.Get("name").String()
 	albumID := album.Get("id").String()
 	albumPath := s.buildAlbumPath(targetUin, albumName)
+	s.resetAlbumVideoStats()
 
 	if s.config.EnableMetadataExport {
 		metaPath := filepath.Join(albumPath, "album_metadata.json")
@@ -374,6 +392,9 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	waitErr := g.Wait()
 	albumBar.SetCurrent(int64(len(photos)))
 	albumBar.SetTotal(int64(len(photos)), true)
+	// 进度条完成后再打调试日志，避免 Windows 上和 mpb 抢同一块终端。
+	s.flushVideoDebugLogs()
+	s.flushAlbumVideoSummary(albumName)
 	return waitErr
 }
 
@@ -553,6 +574,7 @@ func (s *Spider) shouldSkipExisting(ctx context.Context, existingPath string, ca
 		return false
 	}
 	for _, cand := range candidates {
+		// getinfo / HLS 的 HEAD 往往拿不到可靠体积，不能用来判断本地文件是否已经完整。
 		if cand.Kind == qzone.VideoSourceGetInfo || ihttp.IsHLSURL(cand.URL) {
 			continue
 		}
@@ -568,16 +590,19 @@ func (s *Spider) shouldSkipExisting(ctx context.Context, existingPath string, ca
 	return false
 }
 
+// videoSourceAttempt 记录某条候选地址失败时的来源类型和错误，用于调试输出「↩ down 403」。
 type videoSourceAttempt struct {
 	kind string
 	err  error
 }
 
+// videoRoute 描述一次视频下载最终命中了哪条链路，以及前面失败过哪些源。
 type videoRoute struct {
-	winner string
-	failed []videoSourceAttempt
+	winner string               // 成功那条源的 Kind：download / play / hls / getinfo
+	failed []videoSourceAttempt // 成功前已失败的源，为空表示 download_url 一次成功
 }
 
+// downloadMedia 按候选列表依次尝试下载。视频遇到 403/404 会立刻换源，而不是当作风控重试死链。
 func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin string, task mediaTask, target, originalName string) (map[string]interface{}, videoRoute, error) {
 	candidates := append([]qzone.VideoCandidate(nil), task.candidates...)
 	route := videoRoute{}
@@ -585,9 +610,10 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 		res     map[string]interface{}
 		lastErr error
 		tried   []string
-		triedID bool
+		triedID bool // 是否已经用 vid 调过腾讯 getinfo，避免每个失败都重复打接口
 	)
 
+	// tryOne 尝试一条候选；失败记入 route.failed，成功则记下 winner。
 	tryOne := func(cand qzone.VideoCandidate) (map[string]interface{}, error) {
 		kind := cand.Kind
 		if kind == "" {
@@ -616,6 +642,7 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 			return res, route, nil
 		}
 
+		// 列表里的 download/play/hls 都失效后，再按 vid 解析真实 CDN，追加到候选末尾继续试。
 		if task.isVideo && !triedID && task.videoID != "" && ihttp.IsDeadURL(lastErr) && i == len(candidates)-1 {
 			triedID = true
 			extra := s.client.ResolveTencentVideo(ctx, task.videoID)
@@ -624,6 +651,7 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 	}
 
 	if task.isVideo && !triedID && task.videoID != "" {
+		// 最后一次失败不是 403/404 时上面不会预取 getinfo，这里再兜底一次。
 		for _, extra := range s.client.ResolveTencentVideo(ctx, task.videoID) {
 			res, lastErr = tryOne(extra)
 			if lastErr == nil {
@@ -641,6 +669,7 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 	return nil, route, fmt.Errorf("all %d sources failed; last: %w; tried: %s", len(tried), lastErr, strings.Join(tried, " | "))
 }
 
+// downloadCandidate 下载单条候选地址；视频若带 Cookie 被 403/404，会去掉 Cookie 再试一次。
 func (s *Spider) downloadCandidate(ctx context.Context, p *mpb.Progress, targetUin string, cand qzone.VideoCandidate, target, filename, originalName string, isVideo bool) (map[string]interface{}, error) {
 	headers := s.buildDownloadHeaders(targetUin, cand.URL, isVideo, cand.Kind)
 	res, err := s.doDownload(ctx, p, cand, target, filename, originalName, headers, isVideo)
@@ -653,6 +682,7 @@ func (s *Spider) downloadCandidate(ctx context.Context, p *mpb.Progress, targetU
 	return res, err
 }
 
+// doDownload 按候选类型走 HLS 分片下载或普通直链下载。
 func (s *Spider) doDownload(ctx context.Context, p *mpb.Progress, cand qzone.VideoCandidate, target, filename, originalName string, headers map[string]string, isVideo bool) (map[string]interface{}, error) {
 	opts := s.videoBarOptions(cand, isVideo)
 	if cand.Kind == qzone.VideoSourceHLS || ihttp.IsHLSURL(cand.URL) {
@@ -662,6 +692,7 @@ func (s *Spider) doDownload(ctx context.Context, p *mpb.Progress, cand qzone.Vid
 	retry := 3
 	if isVideo {
 		retry = 2
+		// 视频 403/404 视为当前 URL 失效，立即失败以便换下一条源，不要当作风控冷却。
 		opts = append(opts, ihttp.WithFatalStatuses(
 			nhttp.StatusForbidden,
 			nhttp.StatusNotFound,
@@ -684,6 +715,7 @@ func (s *Spider) doDownload(ctx context.Context, p *mpb.Progress, cand qzone.Vid
 	)
 }
 
+// videoBarOptions 调试模式下在进度条上标注 [down]/[play]/[hls]/[getinfo]。
 func (s *Spider) videoBarOptions(cand qzone.VideoCandidate, isVideo bool) []ihttp.DownloadOption {
 	if !s.debugVideoEnabled() || !isVideo || cand.Kind == "" || cand.Kind == "image" {
 		return nil
@@ -691,6 +723,7 @@ func (s *Spider) videoBarOptions(cand qzone.VideoCandidate, isVideo bool) []ihtt
 	return []ihttp.DownloadOption{ihttp.WithBarLabel(videoSourceTag(cand.Kind))}
 }
 
+// buildDownloadHeaders 构造下载请求头。getinfo 解析出的 CDN 需要腾讯视频 Referer，其余走 QQ 空间页。
 func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool, kind string) map[string]string {
 	headers := map[string]string{
 		"cookie":     s.client.Cookie,
@@ -717,6 +750,7 @@ func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool, ki
 	return headers
 }
 
+// cloneHeaders 浅拷贝请求头，用于去掉 Cookie 后再试一次。
 func cloneHeaders(src map[string]string) map[string]string {
 	dst := make(map[string]string, len(src))
 	for k, v := range src {
@@ -725,22 +759,59 @@ func cloneHeaders(src map[string]string) map[string]string {
 	return dst
 }
 
+// debugVideoEnabled 是否开启了菜单里的调试模式（会标注视频拉取链路）。
 func (s *Spider) debugVideoEnabled() bool {
 	return s.config != nil && s.config.EnableDebug
 }
 
+// resetVideoDebugLogs 任务开始时清空链路明细和计数。
 func (s *Spider) resetVideoDebugLogs() {
 	s.debugMu.Lock()
+	s.debugLines = nil
+	s.albumStats = videoDebugStats{}
+	s.taskStats = videoDebugStats{}
+	s.debugMu.Unlock()
+}
+
+// resetAlbumVideoStats 进入下一个相册前，只清相册级计数和待打印明细，总汇总继续累加。
+func (s *Spider) resetAlbumVideoStats() {
+	s.debugMu.Lock()
+	s.albumStats = videoDebugStats{}
 	s.debugLines = nil
 	s.debugMu.Unlock()
 }
 
+// enqueueVideoDebugLog 把一条回退/失败明细放进队列，等相册进度条结束后再输出。
 func (s *Spider) enqueueVideoDebugLog(line string) {
 	s.debugMu.Lock()
 	s.debugLines = append(s.debugLines, line)
 	s.debugMu.Unlock()
 }
 
+// recordVideoDebugLocked 按最终命中的链路给相册和任务计数器 +1。调用方必须已持有 debugMu。
+func (s *Spider) recordVideoDebugLocked(route videoRoute, downloadErr error) {
+	if downloadErr != nil {
+		s.albumStats.fail++
+		s.taskStats.fail++
+		return
+	}
+	switch route.winner {
+	case qzone.VideoSourcePlay:
+		s.albumStats.play++
+		s.taskStats.play++
+	case qzone.VideoSourceHLS:
+		s.albumStats.hls++
+		s.taskStats.hls++
+	case qzone.VideoSourceGetInfo:
+		s.albumStats.getinfo++
+		s.taskStats.getinfo++
+	default:
+		s.albumStats.down++
+		s.taskStats.down++
+	}
+}
+
+// flushVideoDebugLogs 把队列里的回退/失败明细打印到终端和日志。
 func (s *Spider) flushVideoDebugLogs() {
 	s.debugMu.Lock()
 	lines := s.debugLines
@@ -751,11 +822,63 @@ func (s *Spider) flushVideoDebugLogs() {
 	}
 }
 
+// flushAlbumVideoSummary 输出当前相册的链路汇总，例如：🎬 相册 [我的家人]  [down] 980  [play] 15 ...
+func (s *Spider) flushAlbumVideoSummary(albumName string) {
+	if !s.debugVideoEnabled() {
+		return
+	}
+	s.debugMu.Lock()
+	st := s.albumStats
+	s.albumStats = videoDebugStats{}
+	s.debugMu.Unlock()
+	if line := formatVideoDebugSummary(fmt.Sprintf("相册 [%s]", albumName), st); line != "" {
+		s.logger.Info(line)
+	}
+}
+
+// flushTaskVideoSummary 输出整次任务的链路总汇总，例如：🎬 全部视频  [down] 981  [play] 15 ...
+func (s *Spider) flushTaskVideoSummary() {
+	if !s.debugVideoEnabled() {
+		return
+	}
+	s.debugMu.Lock()
+	st := s.taskStats
+	s.taskStats = videoDebugStats{}
+	s.debugMu.Unlock()
+	if line := formatVideoDebugSummary("全部视频", st); line != "" {
+		s.logger.Info(line)
+	}
+}
+
+// formatVideoDebugSummary 生成一行链路计数文案；本次没有视频则返回空串。
+func formatVideoDebugSummary(label string, st videoDebugStats) string {
+	if st.videos() == 0 {
+		return ""
+	}
+	fail := ""
+	if st.fail > 0 {
+		fail = "  " + color.New(color.FgRed).Sprintf("失败 %d", st.fail)
+	}
+	return fmt.Sprintf("🎬 %s  %s %d  %s %d  %s %d  %s %d%s",
+		label,
+		colorVideoSource(qzone.VideoSourceDownload, "[down]"),
+		st.down,
+		colorVideoSource(qzone.VideoSourcePlay, "[play]"),
+		st.play,
+		colorVideoSource(qzone.VideoSourceHLS, "[hls]"),
+		st.hls,
+		colorVideoSource(qzone.VideoSourceGetInfo, "[getinfo]"),
+		st.getinfo,
+		fail,
+	)
+}
+
+// logVideoDebugHint 任务开始时打印图例，说明直链成功只进汇总、回退/失败才逐条打印。
 func (s *Spider) logVideoDebugHint() {
 	if !s.debugVideoEnabled() {
 		return
 	}
-	s.logger.Info(fmt.Sprintf("🔍 调试模式：视频将标注实际拉取链路  %s %s %s %s",
+	s.logger.Info(fmt.Sprintf("🔍 调试模式：直链成功只计入汇总；回退/失败会逐条打印  %s %s %s %s",
 		colorVideoSource(qzone.VideoSourceDownload, "["+videoSourceTag(qzone.VideoSourceDownload)+"]"),
 		colorVideoSource(qzone.VideoSourcePlay, "[play]"),
 		colorVideoSource(qzone.VideoSourceHLS, "[hls]"),
@@ -763,6 +886,7 @@ func (s *Spider) logVideoDebugHint() {
 	))
 }
 
+// logVideoSourceResult 记录一条视频的链路结果。download_url 一次成功只计数；回退或失败才入队待打印。
 func (s *Spider) logVideoSourceResult(route videoRoute, originalName, filename, filePath string, downloadErr error) {
 	if !s.debugVideoEnabled() {
 		return
@@ -775,6 +899,10 @@ func (s *Spider) logVideoSourceResult(route videoRoute, originalName, filename, 
 	red := color.New(color.FgRed, color.Bold).SprintFunc()
 	chain := formatVideoFallbackChain(route.failed)
 
+	s.debugMu.Lock()
+	s.recordVideoDebugLocked(route, downloadErr)
+	s.debugMu.Unlock()
+
 	if downloadErr != nil {
 		tried := chain
 		if tried == "" {
@@ -785,6 +913,12 @@ func (s *Spider) logVideoSourceResult(route videoRoute, originalName, filename, 
 			cyan(originalName),
 			gray(tried),
 		))
+		return
+	}
+
+	// 直链一次成功：不刷屏，只体现在相册/任务汇总里。
+	isFallback := len(route.failed) > 0 || (route.winner != "" && route.winner != qzone.VideoSourceDownload)
+	if !isFallback {
 		return
 	}
 
@@ -814,6 +948,7 @@ func (s *Spider) logVideoSourceResult(route videoRoute, originalName, filename, 
 	))
 }
 
+// videoSourceTag 终端标签：download 显示为更短的 [down]，其余 Kind 原样输出。
 func videoSourceTag(kind string) string {
 	switch kind {
 	case qzone.VideoSourceDownload:
@@ -825,6 +960,7 @@ func videoSourceTag(kind string) string {
 	}
 }
 
+// videoSourceTitle 链路中文名，跟在彩色标签后面。
 func videoSourceTitle(kind string) string {
 	switch kind {
 	case qzone.VideoSourceDownload:
@@ -843,6 +979,7 @@ func videoSourceTitle(kind string) string {
 	}
 }
 
+// colorVideoSource 按链路类型给标签上色，便于扫一眼区分。
 func colorVideoSource(kind, text string) string {
 	switch kind {
 	case qzone.VideoSourceDownload:
@@ -858,6 +995,7 @@ func colorVideoSource(kind, text string) string {
 	}
 }
 
+// formatVideoFallbackChain 把失败过的源压成「down 403 → play 404」，相邻相同项会合并。
 func formatVideoFallbackChain(failed []videoSourceAttempt) string {
 	var parts []string
 	last := ""
@@ -879,6 +1017,7 @@ func formatVideoFallbackChain(failed []videoSourceAttempt) string {
 	return strings.Join(parts, " → ")
 }
 
+// shortVideoErr 调试后缀里优先打 HTTP 状态码，避免把整段错误堆到一行。
 func shortVideoErr(err error) string {
 	if err == nil {
 		return ""
