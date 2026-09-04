@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-09-01
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-02 17:50:00
+ * @LastEditTime: 2026-09-04 09:57:00
  * @FileName: hls.go
  * @Description: [HLS/m3u8 播放链兜底下载，用于 download_url 失效时按网页播放器同样的分片方式拉取视频]
  */
@@ -33,12 +33,14 @@ import (
 	"github.com/vbauerster/mpb/v8/decor"
 )
 
+// hlsVariant 表示主播放列表（master playlist）里的一条码率档。
+// 下载时会选 BANDWIDTH 最高的那档，再递归去拉对应的媒体播放列表。
 type hlsVariant struct {
-	url       string
-	bandwidth int
+	url       string // 该档对应的子播放列表绝对地址
+	bandwidth int    // EXT-X-STREAM-INF 中的 BANDWIDTH，越大通常越清晰
 }
 
-// IsHLSURL 判断 URL 是否为 HLS 播放列表。
+// IsHLSURL 判断 URL 是否为 HLS 播放列表（路径含 .m3u8，或查询串含 m3u8?）。
 func IsHLSURL(raw string) bool {
 	u := strings.ToLower(raw)
 	return strings.Contains(u, ".m3u8") || strings.Contains(u, "m3u8?")
@@ -50,6 +52,7 @@ func (c *Client) DownloadHLS(ctx context.Context, playlistURL, target string, he
 	return c.downloadHLS(ctx, playlistURL, target, headers, p, name, originalName, onProgress, 0, opts...)
 }
 
+// downloadHLS 实际执行 HLS 拉取。depth 用于限制主播放列表嵌套层数，防止死循环。
 func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, headers map[string]string, p *mpb.Progress, name, originalName string, onProgress func(int64), depth int, opts ...DownloadOption) (map[string]interface{}, error) {
 	dopts := applyDownloadOptions(opts)
 	if depth > 3 {
@@ -70,6 +73,7 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 			contentType = respHeader.Get("Content-Type")
 		}
 		if !strings.Contains(strings.ToLower(contentType), "mpegurl") {
+			// 有些「m3u8」地址实际仍返回 mp4，按普通文件下载即可。
 			dlOpts := []DownloadOption{WithFatalStatuses(http.StatusForbidden, http.StatusNotFound, http.StatusGone)}
 			if dopts.barLabel != "" {
 				dlOpts = append(dlOpts, WithBarLabel(dopts.barLabel))
@@ -86,6 +90,7 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 
 	variants, segments, initURI := parseM3U8(trimmed, base)
 	if len(variants) > 0 {
+		// 主播放列表只含多码率入口，选最高带宽那档继续解析媒体列表。
 		best := variants[0]
 		for _, v := range variants[1:] {
 			if v.bandwidth > best.bandwidth {
@@ -111,6 +116,7 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 	}
 	defer out.Close()
 
+	// fMP4 的初始化段必须写在媒体分片前面，否则本地文件无法播放。
 	parts := make([]string, 0, len(segments)+1)
 	if initURI != "" {
 		parts = append(parts, initURI)
@@ -199,6 +205,8 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 	}, nil
 }
 
+// getUnthrottled 直接 GET 指定 URL，不走全局限流。
+// HLS 分片数量多、体积小，若走 Client.limiter 会把下载拖得极慢。
 func (c *Client) getUnthrottled(ctx context.Context, rawURL string, headers map[string]string) ([]byte, int, http.Header, error) {
 	resp, err := c.resty.R().
 		SetContext(ctx).
@@ -210,6 +218,8 @@ func (c *Client) getUnthrottled(ctx context.Context, rawURL string, headers map[
 	return resp.Body(), resp.StatusCode(), resp.Header(), nil
 }
 
+// parseM3U8 解析一份 m3u8 文本。
+// 返回值依次为主播放列表变体、媒体分片绝对地址、以及 EXT-X-MAP 初始化段地址（fMP4 才有）。
 func parseM3U8(body string, base *url.URL) ([]hlsVariant, []string, string) {
 	var (
 		variants  []hlsVariant
@@ -220,6 +230,7 @@ func parseM3U8(body string, base *url.URL) ([]hlsVariant, []string, string) {
 	)
 
 	scanner := bufio.NewScanner(strings.NewReader(body))
+	// 默认 Scanner 缓冲对超长 URI 行不够，这里放到 1MB。
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -254,6 +265,7 @@ func parseM3U8(body string, base *url.URL) ([]hlsVariant, []string, string) {
 	return variants, segments, initURI
 }
 
+// parseM3U8AttrInt 从标签行里取出整型属性，例如 BANDWIDTH=2500000。
 func parseM3U8AttrInt(line, key string) int {
 	upper := strings.ToUpper(line)
 	idx := strings.Index(upper, key+"=")
@@ -269,6 +281,7 @@ func parseM3U8AttrInt(line, key string) int {
 	return n
 }
 
+// parseM3U8QuotedURI 从 EXT-X-MAP:URI="..." 这类标签中取出 URI。
 func parseM3U8QuotedURI(line string) string {
 	idx := strings.Index(strings.ToUpper(line), "URI=")
 	if idx < 0 {
@@ -288,6 +301,7 @@ func parseM3U8QuotedURI(line string) string {
 	return strings.Trim(rest, "\"")
 }
 
+// resolvePlaylistURL 把播放列表里的相对路径解析成绝对 URL。
 func resolvePlaylistURL(base *url.URL, ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || base == nil {

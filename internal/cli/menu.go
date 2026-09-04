@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-02 17:50:00
+ * @LastEditTime: 2026-09-04 10:14:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -41,17 +41,17 @@ import (
 )
 
 const (
+	// QRCodeSavePath 与登录模块共用的二维码临时文件，登录成功后会再清一次。
 	QRCodeSavePath = "qrcode.png"
 )
 
-// CLI 定义了命令行交互客户端
-// 封装了所有的业务模块组件及状态
+// CLI 命令行交互入口，串起登录、菜单、备份和任务记录。
 type CLI struct {
-	client  *qzone.Client
-	http    *http.Client
-	config  *app.Config
-	logger  *zap.SugaredLogger
-	logFact *logger.Factory
+	client  *qzone.Client      // 当前登录的空间客户端；nil 表示尚未登录
+	http    *http.Client       // 登录与空间接口共用的 HTTP 客户端
+	config  *app.Config        // 并发、时间线、调试等可持久化配置
+	logger  *zap.SugaredLogger // 当前输出日志；登录后会切到账号目录
+	logFact *logger.Factory    // 按 QQ 号创建业务日志和 API 日志
 }
 
 // NewCLI 实例化一个新的命令行交互客户端
@@ -122,11 +122,7 @@ func (c *CLI) Menu(ctx context.Context) {
 		default:
 		}
 
-		// 1. 确保已登录 (启动时或切换账号后)
-		// 移除自动强制登录逻辑，让用户先看到主菜单
-		// 只有当用户选择需要登录的功能时，再触发登录校验
-
-		// 2. 显示主菜单
+		// 需要登录的功能在进入时再 ensureLogin，主菜单本身允许未登录浏览。
 		var option string
 		menuMsg := "请选择您要执行的操作:"
 		if c.client != nil {
@@ -219,7 +215,6 @@ func (c *CLI) Menu(ctx context.Context) {
 			c.handleDebugToggle()
 		case strings.Contains(option, "切换账号/重新登录"):
 			c.handleSwitchAccount()
-			// 立即触发登录校验逻辑，这样就能显示账号管理列表了
 			if err := c.ensureLogin(ctx); err != nil {
 				continue
 			}
@@ -231,20 +226,18 @@ func (c *CLI) Menu(ctx context.Context) {
 func (c *CLI) ensureLogin(ctx context.Context) error {
 	sessions, _ := qzone.LoadSessions()
 
-	// 如果没有任何历史账号，直接进入新扫码登录流程
 	if len(sessions) == 0 {
 		return c.loginNew(ctx)
 	}
 
-	// 准备历史账号选项
 	var options []string
-	qqMap := make(map[string]string)
+	qqMap := make(map[string]string) // 菜单文案 → QQ 号，选中后再用它取 Session
 
-	// 按最后使用时间排序
 	var list []*qzone.Session
 	for _, s := range sessions {
 		list = append(list, s)
 	}
+	// 最近用过的账号排前面，方便接着备份。
 	sort.Slice(list, func(i, j int) bool {
 		return list[i].LastUsed.After(list[j].LastUsed)
 	})
@@ -282,7 +275,6 @@ func (c *CLI) ensureLogin(ctx context.Context) error {
 		return c.loginNew(ctx)
 	}
 
-	// 尝试加载选中的账号
 	targetQQ := qqMap[choice]
 	sess := sessions[targetQQ]
 
@@ -296,6 +288,7 @@ func (c *CLI) ensureLogin(ctx context.Context) error {
 	return c.setupClient(client)
 }
 
+// loginNew 走扫码登录，成功后把客户端接到当前 CLI。
 func (c *CLI) loginNew(ctx context.Context) error {
 	c.logger.Info("正在准备登录，请扫描弹出的二维码...")
 	client, err := qzone.NewClientWithQR(ctx, c.http, c.logFact)
@@ -306,9 +299,9 @@ func (c *CLI) loginNew(ctx context.Context) error {
 	return c.setupClient(client)
 }
 
+// setupClient 挂上已登录客户端，并把后续日志写到该 QQ 目录下。
 func (c *CLI) setupClient(client *qzone.Client) error {
 	c.client = client
-	// 登录成功后，切换主日志到当前账号名下
 	if userLogger, err := c.logFact.Create(client.QQ); err == nil {
 		c.logger = userLogger
 	}
@@ -330,8 +323,6 @@ func (c *CLI) handleDebugToggle() {
 	current := c.logFact.IsDebug()
 	newStatus := !current
 	c.logFact.SetDebug(newStatus)
-
-	// 同步并保存配置
 	c.config.EnableDebug = newStatus
 	_ = c.config.Save()
 
@@ -341,7 +332,7 @@ func (c *CLI) handleDebugToggle() {
 	}
 	c.logger.Infof("⚙️  调试模式 %s  （API 日志 + 视频链路标注）", statusStr)
 
-	// 如果已经登录，需要重新创建 client 的 APILogger
+	// 已登录时要换掉 APILogger，否则开关不会立刻作用到后续请求。
 	if c.client != nil {
 		if apiLogger, err := c.logFact.CreateAPILogger(c.client.QQ); err == nil {
 			c.client.APILogger = apiLogger
@@ -436,10 +427,9 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 
 	c.config.EnableTimeline = answers.EnableTimeline
 	c.config.EnableMetadataExport = answers.EnableMetadataExport
-	_ = c.config.Save() // 持久化备份任务配置
+	_ = c.config.Save()
 	exclude := answers.Exclude
 
-	// 2. 获取相册列表
 	c.logger.Infof("📡 正在从腾讯服务器拉取相册列表...")
 	allAlbums, err := c.client.GetAlbumList(ctx, targetUin)
 	if err != nil {
@@ -494,7 +484,7 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	}
 
 	if isSelectAll || len(selectedLabels) == 0 {
-		finalAlbums = nil // nil 表示全部下载
+		finalAlbums = nil // nil 交给 Spider 表示备份全部相册
 		c.logger.Info("✅ 已确认: 备份全部相册")
 	} else {
 		for _, label := range selectedLabels {
@@ -588,6 +578,7 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 		return
 	}
 
+	// 重试用当时那次备份的配置，避免被后来改过的全局设置带偏。
 	taskCfg := c.config.Clone()
 	taskCfg.TaskLimit = record.Config.TaskLimit
 	taskCfg.EnableDynamicTaskLimit = record.Config.EnableDynamicTaskLimit
@@ -614,6 +605,7 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 	if results != nil {
 		remainingFailures = results.FailedItems
 	}
+	// 把原任务里已经成功的失败项划掉，下次重试菜单只剩仍失败的。
 	if updateErr := app.ResolveOpenFailures(record.ID, remainingFailures, retryRecord.ID); updateErr != nil {
 		c.logger.Warnf("⚠️ 更新原任务失败项状态失败: %v", updateErr)
 	}
@@ -621,6 +613,7 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 	c.renderTaskSummary("⭐ 失败项重试报告 ⭐", record.TargetUin, results, retryRecord, true)
 }
 
+// createTaskLogger 为本次备份单独开一份日志；失败时退回 CLI 当前 logger。
 func (c *CLI) createTaskLogger(targetUin string) *zap.SugaredLogger {
 	taskLogger, err := c.logFact.Create(targetUin)
 	if err != nil {
@@ -630,6 +623,7 @@ func (c *CLI) createTaskLogger(targetUin string) *zap.SugaredLogger {
 	return taskLogger
 }
 
+// determineTaskStatus 根据上下文取消、运行错误和失败文件数，判定任务最终状态。
 func (c *CLI) determineTaskStatus(ctx context.Context, results *app.DownloadResult, runErr error) app.TaskStatus {
 	if ctx.Err() != nil {
 		return app.TaskStatusCancelled
@@ -643,6 +637,7 @@ func (c *CLI) determineTaskStatus(ctx context.Context, results *app.DownloadResu
 	return app.TaskStatusSuccess
 }
 
+// saveTaskRecord 把本次结果写进任务记录，供「重试失败项」菜单读取。
 func (c *CLI) saveTaskRecord(record *app.TaskRecord, results *app.DownloadResult, runErr error, status app.TaskStatus) {
 	if record == nil {
 		return
@@ -653,6 +648,7 @@ func (c *CLI) saveTaskRecord(record *app.TaskRecord, results *app.DownloadResult
 	}
 }
 
+// renderTaskSummary 在终端打印本次下载汇总；showFailureTable 为真时再列出失败文件。
 func (c *CLI) renderTaskSummary(title string, targetUin string, results *app.DownloadResult, record *app.TaskRecord, showFailureTable bool) {
 	if results == nil {
 		return
@@ -741,12 +737,12 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 	type friendStatus struct {
 		uin  string
 		name string
-		info string
+		info string // 对该好友相册的访问结论，例如公开数量或无权访问
 	}
 	statusChan := make(chan friendStatus, len(friends))
 
 	var wg sync.WaitGroup
-	// 降低并发数到 3，模拟更像人类的行为
+	// 并发压到 3，再加随机间隔，降低被当成脚本扫相册的概率。
 	semaphore := make(chan struct{}, 3)
 
 	for _, f := range friends {
@@ -760,7 +756,6 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 			}
 			defer func() { <-semaphore }()
 
-			// 引入 500ms - 1500ms 的随机延迟，规避自动化检测
 			select {
 			case <-ctx.Done():
 				return

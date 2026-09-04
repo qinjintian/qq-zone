@@ -12,17 +12,6 @@
  * @Description: [备份任务记录持久化管理，支持失败项追踪、任务回放与重试链路闭环]
  */
 
-// 任务记录落在 storage/tasks/<id>.json，一条 JSON 对应一次备份或一次失败重试。
-//
-// 重试闭环大致是：
-//  1. 备份任务结束时，把本次失败列表同时写入 FailedItems 和 OpenFailedItems
-//  2. 用户选择「重试失败项」时，新建一条 retry 记录，只下载源任务的 OpenFailedItems
-//  3. 重试结束后，用仍失败的列表回写源任务的 OpenFailedItems
-//     - 全部成功：源任务 OpenFailedItems 清空，状态改为 success
-//     - 仍有失败：源任务继续出现在可重试列表里，下次只重试剩余项
-//
-// FailedItems 是本次运行的历史快照，写完不再改；
-// OpenFailedItems 是「还没处理完」的待办，会被后续重试任务改写。
 package app
 
 import (
