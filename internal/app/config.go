@@ -27,7 +27,7 @@ type Config struct {
 	EnableDynamicTaskLimit bool `json:"enable_dynamic_task_limit"` // 是否开启智能动态并发
 	EnableTimeline         bool `json:"enable_timeline"`           // 是否按 年/月 整理时间轴
 	EnableMetadataExport   bool `json:"enable_metadata_export"`    // 是否导出相册元数据 (JSON)
-	EnableDebug            bool `json:"enable_debug"`              // 是否开启调试模式
+	EnableDebug            bool `json:"enable_debug"`              // 调试模式：API 日志 + 备份时视频链路标注
 }
 
 const configPath = "storage/config.json"
