@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-09-01
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 09:59:00
+ * @LastEditTime: 2026-09-04 17:10:00
  * @FileName: video.go
  * @Description: [QQ 空间视频多源解析：下载链优先，播放链/HLS/腾讯视频 getinfo 作为失效 URL 的兜底]
  */
@@ -84,7 +84,8 @@ func (c *Client) GetVideoSource(ctx context.Context, targetUin, albumID, sloc st
 	return src, nil
 }
 
-// ResolveTencentVideo 在下载链和播放链都失败后，尝试用 vid 换真实 CDN。
+// ResolveTencentVideo 用 11 位 vid 调腾讯 getinfo，把解析出的 CDN 地址作为 getinfo 候选返回。
+// 调用方通常在 download / play / hls 都失败后再用；非法 vid 直接返回空列表。
 func (c *Client) ResolveTencentVideo(ctx context.Context, vid string) []VideoCandidate {
 	vid = strings.TrimSpace(vid)
 	if vid == "" || !tencentVIDPattern.MatchString(vid) {
@@ -252,7 +253,7 @@ func (src *VideoSource) mergeVideoInfo(vInfo gjson.Result) {
 	}
 }
 
-// addVideoCandidate 把 URL 展开成 http/https 变体后写入列表，已出现过的地址会被丢掉。
+// addVideoCandidate 写入候选列表；http:// 会再补一条 https://，已经出现过的地址会被丢掉。
 func addVideoCandidate(dst *[]VideoCandidate, seen map[string]bool, raw, kind string) {
 	for _, u := range expandURLSchemes(raw) {
 		if u == "" || seen[u] {

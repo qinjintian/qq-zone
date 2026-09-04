@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 10:12:00
+ * @LastEditTime: 2026-09-04 17:10:00
  * @FileName: qzone.go
  * @Description: [QQ 空间扫码登录流程实现，包含二维码生成、状态轮询及登录凭证提取]
  */
@@ -168,8 +168,8 @@ StartLoop:
 	}
 }
 
-// checkLoginStatus 不断向腾讯鉴权服务器查询当前二维码的状态
-// 状态码如：65(二维码失效)、66(等待扫码)、67(已扫码待确认)、0(登录成功)
+// checkLoginStatus 向 ptqrlogin 查询一次当前二维码状态（真正的轮询在 loopUntilLogin）。
+// 返回的 JSONP 状态码如：65(失效)、66(等待扫码)、67(已扫码待确认)、0(登录成功)。
 func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig, qrsig string) (string, http.Header, error) {
 	headers := map[string]string{
 		"user-agent": UserAgent,

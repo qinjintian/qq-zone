@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-03 11:15:00
+ * @LastEditTime: 2026-09-04 17:10:00
  * @FileName: spider.go
  * @Description: [QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度]
  */
@@ -43,14 +43,14 @@ import (
 
 // FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
-	Album     string `json:"album"`
-	Name      string `json:"name"`
-	Error     string `json:"error"`
-	TargetUin string `json:"target_uin,omitempty"`
-	AlbumID   string `json:"album_id,omitempty"`
-	AlbumRaw  string `json:"album_raw,omitempty"`
-	PhotoRaw  string `json:"photo_raw,omitempty"`
-	IsVideo   bool   `json:"is_video,omitempty"`
+	Album     string `json:"album"`                // 相册名称，失败清单和重试菜单展示用
+	Name      string `json:"name"`                 // 本地保存文件名（失败时也可能是 sloc）
+	Error     string `json:"error"`                // 失败原因
+	TargetUin string `json:"target_uin,omitempty"` // 被备份的 QQ 号
+	AlbumID   string `json:"album_id,omitempty"`   // 空间侧相册 ID，用来重新定位相册
+	AlbumRaw  string `json:"album_raw,omitempty"`  // 当时的相册 JSON，重试时还原字段
+	PhotoRaw  string `json:"photo_raw,omitempty"`  // 当时的照片 JSON，重试时重新解析 URL
+	IsVideo   bool   `json:"is_video,omitempty"`   // 是否视频（含按视频链路保存的实况图）
 }
 
 // DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
@@ -77,12 +77,11 @@ func (r *DownloadResult) addFailedItem(item FailedItem) {
 
 // Spider 负责调度和执行整个相册备份的核心业务逻辑。
 type Spider struct {
-	client    *qzone.Client
-	whitelist map[string]bool
-	config    *Config
-	logger    *zap.SugaredLogger
-
-	results DownloadResult
+	client    *qzone.Client      // 已登录的空间客户端
+	whitelist map[string]bool    // 用户勾选的相册名；空 map 表示备份全部
+	config    *Config            // 并发、时间线、调试等任务配置
+	logger    *zap.SugaredLogger // 本次任务日志
+	results   DownloadResult     // 整次任务的成功/失败统计
 
 	debugMu    sync.Mutex      // 保护下面调试日志队列和链路计数，下载协程会并发写入
 	debugLines []string        // 回退/失败明细，等当前相册进度条结束后再打印，避免和 mpb 抢终端
@@ -103,11 +102,11 @@ func (st videoDebugStats) videos() uint64 {
 type mediaTask struct {
 	candidates []qzone.VideoCandidate // 按优先级排列的下载地址：download → play → hls，getinfo 后补
 	videoID    string                 // 腾讯视频 vid，下载链和播放链都失效时用来换 CDN
-	filename   string
+	filename   string                 // 本地保存文件名（IMG_/VID_ + 时间 + 哈希）
 	isVideo    bool
 }
 
-// NewSpider 实例化一个下载爬虫。
+// NewSpider 实例化一个下载爬虫。albums 为用户勾选的相册名列表，空切片表示全部备份。
 func NewSpider(client *qzone.Client, config *Config, albums []string, logger *zap.SugaredLogger) *Spider {
 	wl := make(map[string]bool)
 	for _, a := range albums {
@@ -121,7 +120,7 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 	}
 }
 
-// Download 开始执行批量相册下载任务。
+// Download 开始执行批量相册下载任务。相册串行处理，单个相册内部再并发下文件。
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
@@ -134,6 +133,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 		s.logger.Warnf("未发现任何相册，请确认账号 [%s] 空间是否开放或登录是否失效", targetUin)
 	}
 
+	// 丢掉无权访问的，以及用户没勾选的相册。
 	filteredAlbums := make([]gjson.Result, 0)
 	for _, album := range albums {
 		name := album.Get("name").String()
@@ -154,6 +154,7 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	s.logVideoDebugHint()
 	p := mpb.NewWithContext(ctx)
 
+	// 相册必须一个下完再下下一个，避免同时打太多相册列表接口触发风控。
 	for i, album := range filteredAlbums {
 		select {
 		case <-ctx.Done():
@@ -188,6 +189,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 	s.resetVideoDebugLogs()
 	s.logVideoDebugHint()
 	p := mpb.NewWithContext(ctx)
+	// 失败项逐条重试，不再走相册级动态并发，避免一次把所有失败 URL 打爆。
 	retryBar := p.AddBar(int64(len(failedItems)),
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
@@ -201,7 +203,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		),
 	)
 
-	localFileCache := make(map[string]map[string]string)
+	localFileCache := make(map[string]map[string]string) // 同一相册只扫一遍本地文件
 	for _, item := range failedItems {
 		select {
 		case <-ctx.Done():
@@ -212,6 +214,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		default:
 		}
 
+		// 重试依赖当时保存的 album_raw / photo_raw；缺了无法还原 URL，只能记失败让用户重新备份。
 		album := gjson.Parse(item.AlbumRaw)
 		photo := gjson.Parse(item.PhotoRaw)
 		if !album.Exists() || !photo.Exists() {
@@ -236,6 +239,7 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 			localFileCache[albumPath] = localFiles
 		}
 
+		// 始终按增量下，避免把已经成功的文件清掉重来。
 		_ = s.downloadItem(ctx, p, targetUin, photo, album, albumPath, true, localFiles)
 		retryBar.Increment()
 	}
@@ -248,12 +252,15 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 }
 
 // downloadAlbum 负责下载单个相册内的所有照片和视频。
+// 并发由 active（正在下的文件数）和 currentLimit（同时允许几路）卡住；
+// 开启智能动态并发时，另有观察协程每 2 秒按吞吐和失败数加减上限。
 func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin string, album gjson.Result, albumIdx, albumTotal int, exclude bool) error {
 	albumName := album.Get("name").String()
 	albumID := album.Get("id").String()
 	albumPath := s.buildAlbumPath(targetUin, albumName)
 	s.resetAlbumVideoStats()
 
+	// 把相册原始 JSON 落到目录里，方便以后对照空间侧字段。
 	if s.config.EnableMetadataExport {
 		metaPath := filepath.Join(albumPath, "album_metadata.json")
 		_ = os.WriteFile(metaPath, []byte(album.Raw), 0644)
@@ -290,13 +297,15 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 
 	g, gCtx := errgroup.WithContext(ctx)
 
+	// active：此刻正在下载的文件数。
+	// currentLimit：同时最多允许多少路；auto 模式下观察协程会改这个数，已开工的下载不会被杀掉。
 	var active int32
 	baseLimit := int32(s.config.TaskLimit)
 	if baseLimit < 1 {
 		baseLimit = 10
 	}
 	currentLimit := baseLimit
-	maxLimit := baseLimit * 3
+	maxLimit := baseLimit * 3 // auto 时上限最多涨到起步值的 3 倍（默认 10→30）
 	minLimit := int32(1)
 
 	taskCh := make(chan int, len(photos))
@@ -305,6 +314,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	}
 	close(taskCh)
 
+	// 派活：队列里还有文件，且 active 未顶到 currentLimit 时才新开一路下载。
 	g.Go(func() error {
 		for i := range taskCh {
 			for {
@@ -331,13 +341,15 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		return nil
 	})
 
+	// 智能动态并发：每 2 秒看吞吐和失败，只改 currentLimit（+1 / -1 / 不动）。
+	// 「还行」不是和某个固定 KB/s 比，而是这一轮速度 ≥ 上一轮速度的 90%。
 	if s.config.EnableDynamicTaskLimit {
 		g.Go(func() error {
 			var (
-				lastBytes      uint64
-				lastFailed     uint64
-				lastThroughput float64
-				stagnantTicks  int
+				lastBytes      uint64  // 上一轮结束时的累计写盘字节（BytesDone 的记号）
+				lastFailed     uint64  // 上一轮结束时的累计失败数
+				lastThroughput float64 // 上一轮速度（字节/秒）；0 表示还没有上一轮
+				stagnantTicks  int     // 连续多少轮吞吐为 0
 			)
 			sampleWindow := 2 * time.Second
 
@@ -352,6 +364,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 						return nil
 					}
 
+					// 这一轮 2 秒写了多少 = 现在的累计写盘量 − 上一轮记号。
 					currBytes := atomic.LoadUint64(&s.results.BytesDone)
 					bytesDiff := currBytes - lastBytes
 					lastBytes = currBytes
@@ -360,7 +373,10 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 					failedDiff := currFailed - lastFailed
 					lastFailed = currFailed
 
+					// 当前速度 = 这两秒写入的字节数 ÷ 2。
 					throughput := float64(bytesDiff) / sampleWindow.Seconds()
+
+					// 这两秒里有新失败：上限 -1，先降压（解析失败、超时、403 等都会进来）。
 					if failedDiff > 0 && cl > minLimit {
 						atomic.AddInt32(&currentLimit, -1)
 						stagnantTicks = 0
@@ -368,6 +384,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 						continue
 					}
 
+					// 吞吐为 0：连续约 4 秒（2 轮）且名额已用满，再 -1。这一轮不更新 lastThroughput。
 					if throughput == 0 {
 						stagnantTicks++
 						if stagnantTicks >= 2 && act >= cl && cl > minLimit {
@@ -378,6 +395,9 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 					}
 
 					stagnantTicks = 0
+					// 加并发必须同时：没新失败、人已经满、还没到 maxLimit。
+					// lastThroughput==0：第一轮没有对照，人满就可以试着 +1。
+					// 之后：当前速度 ≥ 上一轮 × 90% 才叫还行；掉超过 10% 则不加不减。
 					if act >= cl && cl < maxLimit {
 						if lastThroughput == 0 || throughput >= lastThroughput*0.9 {
 							atomic.AddInt32(&currentLimit, 1)
@@ -412,6 +432,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		originalName = sloc
 	}
 
+	// 拍摄时间优先，没有再用上传时间；后面用来起文件名、按年/月归档、回写本地修改时间。
 	shootTime := photo.Get("rawshoottime").String()
 	if shootTime == "" || shootTime == "0" {
 		shootTime = photo.Get("uploadtime").String()
@@ -437,6 +458,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	var tasks []mediaTask
 	isVideo := photo.Get("is_video").Bool()
 
+	// 图片地址：raw → origin_url → url；b&bo= 改成 o&bo= 尽量拿原图而不是预览。
 	imgSource := photo.Get("raw").String()
 	if imgSource == "" {
 		imgSource = photo.Get("origin_url").String()
@@ -452,6 +474,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	if isVideo {
 		imgPrefix = "VID_"
 	}
+	// 文件名：前缀 + 日期_时分秒 + sloc 哈希，避免中文原名和重名冲突。
 	imgFilename := fmt.Sprintf("%s%s_%s_%s", imgPrefix, filenameDate[:8], filenameDate[8:], util.MD5(sloc)[8:24])
 	ext := ".jpg"
 	if strings.Contains(imgSource, ".png") {
@@ -462,6 +485,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	imgFilename += ext
 
 	if isVideo {
+		// 下载时再解析视频多源，避免相册列表里的 URL 排队后过期。
 		source, videoErr := s.client.GetVideoSource(ctx, targetUin, album.Get("id").String(), sloc, photo)
 		if videoErr != nil || source == nil || len(source.Candidates) == 0 {
 			s.results.addFailedItem(s.makeFailedItem(targetUin, album, photo, sloc, videoErr, true))
@@ -485,6 +509,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	for _, task := range tasks {
 		isSkip := false
 		var route videoRoute
+		// 增量模式：本地已有同名（无扩展名）文件，且体积看起来完整，则跳过下载。
 		if exclude {
 			base := strings.TrimSuffix(task.filename, filepath.Ext(task.filename))
 			if existingPath, ok := localFiles[base]; ok {
@@ -497,6 +522,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 
 		if !isSkip {
 			savePath := albumPath
+			// 按拍摄时间归档到 年/月 子目录。
 			if s.config.EnableTimeline && shootDate != "" {
 				savePath = filepath.Join(albumPath, shootDate[:4], shootDate[4:6])
 				_ = os.MkdirAll(savePath, os.ModePerm)
@@ -514,6 +540,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 				continue
 			}
 
+			// 下载层可能根据 Content-Type 改过扩展名，后面回写时间和统计要用最终文件名。
 			if res != nil {
 				if finalName, ok := res["filename"].(string); ok {
 					task.filename = finalName
@@ -527,6 +554,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 		}
 		actualTarget := filepath.Join(finalSavePath, task.filename)
 
+		// 把本地修改时间改成拍摄时间，导入系统相册后时间线才是当年那一天。
 		if !t.IsZero() {
 			if chtimesErr := os.Chtimes(actualTarget, t, t); chtimesErr != nil {
 				s.logger.Debugf("failed to set OS time for %s: %v", actualTarget, chtimesErr)
@@ -568,6 +596,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	return nil
 }
 
+// shouldSkipExisting 用 HEAD 的 Content-Length 对比本地文件大小，判断增量模式下能否跳过。
 func (s *Spider) shouldSkipExisting(ctx context.Context, existingPath string, candidates []qzone.VideoCandidate) bool {
 	fi, err := os.Stat(existingPath)
 	if err != nil || fi.Size() <= 0 {
@@ -583,6 +612,7 @@ func (s *Spider) shouldSkipExisting(ctx context.Context, existingPath string, ca
 			continue
 		}
 		cLen, _ := strconv.ParseInt(head.Get("Content-Length"), 10, 64)
+		// 远端声明的长度不超过本地已有大小，认为已经下全了。
 		if cLen > 0 && cLen <= fi.Size() {
 			return true
 		}
@@ -630,6 +660,7 @@ func (s *Spider) downloadMedia(ctx context.Context, p *mpb.Progress, targetUin s
 		return out, nil
 	}
 
+	// 按候选顺序试：前一条死链（403/404）就立刻换下一条，成功则记下 winner。
 	for i := 0; i < len(candidates); i++ {
 		select {
 		case <-ctx.Done():
@@ -1034,6 +1065,7 @@ func shortVideoErr(err error) string {
 	return msg
 }
 
+// buildAlbumPath 生成本地相册目录 storage/qzone/<QQ>/album/<相册名>；非法路径名则改用哈希。
 func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {
 	baseDir := filepath.Join("storage", "qzone", targetUin, "album")
 	safeName := sanitizePath(albumName)
@@ -1047,6 +1079,8 @@ func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {
 	return albumPath
 }
 
+// buildLocalFileIndex 增量时按「去掉扩展名的文件名」建索引，用来匹配即将下载的 IMG_/VID_ 文件。
+// 非增量则清空相册目录，准备全量重下。
 func (s *Spider) buildLocalFileIndex(albumPath string, exclude bool) map[string]string {
 	localFiles := make(map[string]string)
 	if exclude {
@@ -1066,6 +1100,7 @@ func (s *Spider) buildLocalFileIndex(albumPath string, exclude bool) map[string]
 	return localFiles
 }
 
+// makeFailedItem 把当前相册/照片的原始 JSON 一并记下，失败重试时才能重新解析 URL。
 func (s *Spider) makeFailedItem(targetUin string, album, photo gjson.Result, name string, err error, isVideo bool) FailedItem {
 	errMsg := "unknown error"
 	if err != nil {
@@ -1084,6 +1119,7 @@ func (s *Spider) makeFailedItem(targetUin string, album, photo gjson.Result, nam
 	}
 }
 
+// trackWrittenBytes 把本次写出的字节累加进 BytesDone，动态并发每 2 秒用它算吞吐。
 func (s *Spider) trackWrittenBytes(delta int64) {
 	if delta <= 0 {
 		return
@@ -1091,6 +1127,7 @@ func (s *Spider) trackWrittenBytes(delta int64) {
 	atomic.AddUint64(&s.results.BytesDone, uint64(delta))
 }
 
+// updateResults 更新成功计数；跳过的记入 Skipped，新下的记入 NewAdded，并区分图片/视频。
 func (s *Spider) updateResults(isSkip, isVideo bool) {
 	atomic.AddUint64(&s.results.Success, 1)
 	if isSkip {
@@ -1105,6 +1142,7 @@ func (s *Spider) updateResults(isSkip, isVideo bool) {
 	}
 }
 
+// sanitizePath 去掉相册名里不能当文件夹名的字符，避免 Windows 建目录失败。
 func sanitizePath(name string) string {
 	name = strings.TrimSuffix(name, ".")
 	invalid := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}

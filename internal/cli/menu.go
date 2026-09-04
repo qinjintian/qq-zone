@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 10:14:00
+ * @LastEditTime: 2026-09-04 17:10:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -318,7 +318,7 @@ func (c *CLI) handleSwitchAccount() {
 	c.logger.Info("🔄 已准备切换账号")
 }
 
-// handleDebugToggle 切换并持久化调试模式 (API 日志开关)
+// handleDebugToggle 切换并持久化调试模式（API 日志 + 备份时视频链路标注）。
 func (c *CLI) handleDebugToggle() {
 	current := c.logFact.IsDebug()
 	newStatus := !current
