@@ -1,6 +1,6 @@
 <p align="center">
-  <h1 align="center">🚀 QQ-Zone Album Backup Tool</h1>
-  <p align="center"><b>一款极简、好用的 QQ 空间相册备份工具，守护您的数字回忆。</b></p>
+  <h1 align="center">QQ 空间相册备份（原图 / 原视频 / 实况图）</h1>
+  <p align="center"><b>扫码登录，一键下载到本地。QQ-Zone Album Backup Tool</b></p>
   <p align="center">
     <a href="https://github.com/qinjintian/qq-zone/releases">
       <img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="release">
@@ -20,25 +20,28 @@
   </p>
 </p>
 
+<p align="center">
+  <img src="docs/images/demo.png" alt="扫码登录并勾选相册" width="920">
+</p>
+
+> **💡 不会写代码也能用**
+>
+> **不要点右上角绿色 `Code` 按钮下载源码。** 请到 Release 下载已经打包好的程序，双击即可运行：
+>
+> 👉 [**下载最新版**](https://github.com/qinjintian/qq-zone/releases/latest)
+>
+> | 系统 | 下载文件 |
+> | --- | --- |
+> | Windows | `qq-zone-win.exe` |
+> | macOS（Apple 芯片） | `qq-zone-macos-m-series` |
+> | macOS（Intel） | `qq-zone-macos-intel` |
+> | Linux | `qq-zone-linux` |
+
 ---
 
 ## 🌟 简介
 
-**QQ-Zone Album Backup Tool** 是一款专为简化流程而生的 QQ 空间相册备份工具。
-
-在这个数字时代，QQ 空间承载了我们无数的青春记忆。然而，手动备份成千上万张照片不仅繁琐，还容易丢失原图质量。本项目采用 **Go 语言** 深度重构，支持 **原图无损下载** 并 **完整保留 EXIF 元信息**。只需通过 **手机 QQ 扫码登录** 即可一键开启自动化备份流程，将您的珍贵回忆以最原始的状态永久封存在本地。
-
-> **Why choose this?** 拒绝画质压缩！拒绝繁琐的 Cookie 复制！我们提供的是**丝滑**的备份体验。
-
-> **💡 小白用户请看这里**
-> 
-> 如果你不懂代码、不会配置 Go 语言环境，**请不要点击右上角的绿色 `Code` 按钮下载源码！**
-> 
-> 请直接点击下方链接，进入发布页面下载已经打包好的现成程序，双击即可运行：
-> 
-> 👉 [**点击前往 Release 页面下载最新版可执行程序**](https://github.com/qinjintian/qq-zone/releases/latest)
->
-> *(Windows 用户请下载 `qq-zone-win.exe`，Mac 用户请下载带有 `macos` 字样的文件)*
+QQ 空间里堆着很多人的照片和视频，手动保存又慢，还经常变成压缩图。本工具用 **Go** 重写，支持 **原图 / 原视频 / 实况图** 下载，并 **保留 EXIF**。手机 QQ **扫码登录** 后勾选相册即可备份到本地，不用复制 Cookie。
 
 ## ✨ 核心特性
 
@@ -51,16 +54,16 @@
 - 🔍 **先看清谁对我开放**：列出能访问的好友空间和公开相册，再决定备份谁。
 - 🛡️ **限流会等着，Ctrl+C 停得住**：被减速时自动等待，进度条看得到速度；中途退出尽量不把文件写坏。
 
-> Go 开发者欢迎直接 clone：扫码登录、视频失效换源、安全续传和动态并发都在 `internal/` 里。
-
 ---
 
 ## 🚀 快速开始
 
-### 方式一：直接运行 (推荐)
-- **从 Release 下载**：前往 [Releases](https://github.com/qinjintian/qq-zone/releases) 页面下载最新的 `qq-zone.exe`。
+### 方式一：直接运行（推荐）
+
+前往 [Releases](https://github.com/qinjintian/qq-zone/releases/latest) 下载对应系统的文件。Windows 用户下载 `qq-zone-win.exe` 后双击运行。
 
 ### 方式二：源码编译
+
 1. **克隆仓库**
    ```bash
    git clone https://github.com/qinjintian/qq-zone.git
@@ -90,8 +93,6 @@
 
 ## 📖 使用指南
 
-![Usage Guide](docs/images/demo.png)
-
 1. **启动程序**：双击 Release 里的可执行文件，或运行自己编译出的程序。先进入主菜单，选到需要登录的功能时再提示你登录。
 2. **登录**：第一次会在终端画出二维码（同时生成 `qrcode.png`），用手机 QQ 扫一下即可。以前登录过会先列出历史账号，选一个就能继续，不用反复扫码。
 3. **选功能**：方向键 `↑` `↓` 移动，`Enter` 确认。
@@ -103,6 +104,26 @@
 4. **配一下任务**：并发填 `auto` 即可；建议打开增量下载（跳过已有文件）、按年/月整理、导出相册元数据。
 5. **勾选相册**：空格勾选，也可点「全选」；直接回车则备份全部。`Enter` 开始下载。
 6. **看结果**：下完会出任务报告。照片和视频在 `storage/qzone/<QQ号>/album/`，任务记录在 `storage/tasks/`。中途想停按一次 `Ctrl+C`，等当前文件收尾即可。
+
+## ❓ 常见问题
+
+**下下来的是原图，还是空间里看到的压缩图？**  
+按相册原始分辨率下载，并尽量保留 EXIF。不是页面上的预览图。
+
+**一定要黄钻才能下原图吗？**  
+以 QQ 空间实际开放的权限为准。空间对你可见的原图/视频，工具就会去下；没有权限的相册会被跳过。
+
+**视频或实况图失败怎么办？**  
+下载地址 403 时会自动改走播放地址或 HLS。仍失败的文件会记进任务记录，可在菜单里选「重试上次失败项」。
+
+**好友相册为什么是空的？**  
+对方没对你开放，或相册是私密的。可先用「查看对我开放的好友」确认哪些空间能进。
+
+**中途按 Ctrl+C 会把文件下坏吗？**  
+按一次后会等当前文件收尾再退出，尽量不留下半截文件。未完成的可以下次增量续传或失败重试。
+
+**文件保存在哪？**  
+`storage/qzone/<QQ号>/album/`。任务记录在 `storage/tasks/`。
 
 ---
 
@@ -150,7 +171,7 @@
 
 ## 🤝 贡献与反馈
 
-如果您觉得这个项目对您有帮助，请给一个 **⭐ Star**！这是对作者最大的鼓励。
+如果这个项目对你有帮助，欢迎点一个 **⭐ Star**。
 
 - **作者**: qinjintian
 - **邮箱**: [514092640@qq.com](mailto:514092640@qq.com)
