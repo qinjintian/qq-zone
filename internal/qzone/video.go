@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-09-01
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-01 15:40:00
+ * @LastEditTime: 2026-09-04 09:59:00
  * @FileName: video.go
  * @Description: [QQ 空间视频多源解析：下载链优先，播放链/HLS/腾讯视频 getinfo 作为失效 URL 的兜底]
  */
@@ -38,18 +38,19 @@ const (
 	VideoSourceGetInfo = "getinfo"
 )
 
+// tencentVIDPattern 匹配腾讯视频 11 位 vid。相册里其它格式的 video_id 不能拿去打 getinfo。
 var tencentVIDPattern = regexp.MustCompile(`(?i)^[a-z0-9]{11}$`)
 
 // VideoCandidate 表示一条可尝试的视频拉取地址。
 type VideoCandidate struct {
-	URL  string
-	Kind string
+	URL  string // 实际请求的媒体地址
+	Kind string // 来源类型：download / play / hls / getinfo
 }
 
-// VideoSource 一次 floatview 解析得到的全部候选源。
+// VideoSource 一次解析得到的全部候选源，以及后续 getinfo 兜底用的 vid。
 type VideoSource struct {
-	Candidates []VideoCandidate
-	VideoID    string
+	Candidates []VideoCandidate // 按优先顺序排列：下载链 → 播放链 → HLS
+	VideoID    string           // 腾讯视频 vid；下载链全失败后才用来调 getinfo
 }
 
 // GetVideoSource 解析指定相册视频的全部可用地址。
@@ -66,6 +67,7 @@ func (c *Client) GetVideoSource(ctx context.Context, targetUin, albumID, sloc st
 		src.mergeVideoInfo(floatview)
 	}
 
+	// 相册列表里偶发也带 video_info，与 floatview 合并去重，避免接口抖动丢字段。
 	if photo.Exists() {
 		src.mergeVideoInfo(photo.Get("video_info"))
 		if src.VideoID == "" {
@@ -89,6 +91,7 @@ func (c *Client) ResolveTencentVideo(ctx context.Context, vid string) []VideoCan
 		return nil
 	}
 
+	// 两条 getinfo 入口轮询：H5 优先，失败再试 PC 端。
 	apis := []string{
 		fmt.Sprintf("https://h5vv.video.qq.com/getinfo?vid=%s&platform=11001&sdtfrom=v1010&otype=json&defn=mp4", vid),
 		fmt.Sprintf("https://vv.video.qq.com/getinfo?vids=%s&platform=101001&charge=0&otype=json&defn=shd", vid),
@@ -118,6 +121,7 @@ func (c *Client) ResolveTencentVideo(ctx context.Context, vid string) []VideoCan
 	return out
 }
 
+// fetchFloatviewVideoInfo 调用空间浮层接口，取出指定照片条目上的 video_info。
 func (c *Client) fetchFloatviewVideoInfo(ctx context.Context, targetUin, albumID, sloc string) (gjson.Result, error) {
 	headers := map[string]string{
 		"cookie":     c.Cookie,
@@ -159,6 +163,8 @@ func (c *Client) fetchFloatviewVideoInfo(ctx context.Context, targetUin, albumID
 	return vInfo, nil
 }
 
+// pickFloatviewPhoto 从浮层返回的照片列表里定位当前视频。
+// 优先按 sloc/lloc/picKey 精确匹配，其次用页内序号，最后退到第一条带 video_info 的项。
 func pickFloatviewPhoto(photos []gjson.Result, sloc string, picPos int64) gjson.Result {
 	for _, p := range photos {
 		if p.Get("sloc").String() == sloc || p.Get("lloc").String() == sloc || p.Get("picKey").String() == sloc {
@@ -176,6 +182,8 @@ func pickFloatviewPhoto(photos []gjson.Result, sloc string, picPos int64) gjson.
 	return photos[0]
 }
 
+// mergeVideoInfo 把一份 video_info JSON 里的下载链、播放链并入候选列表。
+// 已知字段名先收，再扫一遍所有 http 字符串，兼容接口改名；封面图会被跳过。
 func (src *VideoSource) mergeVideoInfo(vInfo gjson.Result) {
 	if src == nil || !vInfo.Exists() {
 		return
@@ -234,6 +242,8 @@ func (src *VideoSource) mergeVideoInfo(vInfo gjson.Result) {
 		}
 	}
 
+	// 下载链必须排在播放链前面，调用方会按 Candidates 顺序依次尝试。
+
 	for _, u := range downloadURLs {
 		appendVariants(u, VideoSourceDownload)
 	}
@@ -242,6 +252,7 @@ func (src *VideoSource) mergeVideoInfo(vInfo gjson.Result) {
 	}
 }
 
+// addVideoCandidate 把 URL 展开成 http/https 变体后写入列表，已出现过的地址会被丢掉。
 func addVideoCandidate(dst *[]VideoCandidate, seen map[string]bool, raw, kind string) {
 	for _, u := range expandURLSchemes(raw) {
 		if u == "" || seen[u] {
@@ -252,6 +263,8 @@ func addVideoCandidate(dst *[]VideoCandidate, seen map[string]bool, raw, kind st
 	}
 }
 
+// qualityVariants 为 QQ 空间常见的 f0/f20 清晰度后缀互出一条备用地址。
+// f0 通常是原片，f20 是转码档；下载链失效时另一档有时仍可用。
 func qualityVariants(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -282,6 +295,7 @@ func qualityVariants(raw string) []string {
 	return out
 }
 
+// expandURLSchemes 规范化 JSON 转义斜杠，并给 http 地址补一条 https 备用。
 func expandURLSchemes(raw string) []string {
 	raw = strings.TrimSpace(strings.ReplaceAll(raw, `\/`, "/"))
 	if raw == "" || !strings.HasPrefix(raw, "http") {
@@ -294,8 +308,10 @@ func expandURLSchemes(raw string) []string {
 	return out
 }
 
+// parseTencentGetInfoURLs 从 getinfo 的 JSON/JSONP 里拼出完整 mp4 地址：CDN 前缀 + 文件名 + vkey。
 func parseTencentGetInfoURLs(body string) []string {
 	jsonStr := strings.TrimSpace(body)
+	// getinfo 常包一层 QZOutputJson=... 回调，先裁出中间的 JSON 对象。
 	if i := strings.Index(jsonStr, "{"); i >= 0 {
 		if j := strings.LastIndex(jsonStr, "}"); j > i {
 			jsonStr = jsonStr[i : j+1]
@@ -331,6 +347,7 @@ func parseTencentGetInfoURLs(body string) []string {
 	return urls
 }
 
+// firstNonEmpty 返回第一个非空字符串，用于从多个字段名里取 vid。
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {

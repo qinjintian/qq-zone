@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
+ * @LastEditTime: 2026-09-04 10:12:00
  * @FileName: qzone.go
  * @Description: [QQ 空间扫码登录流程实现，包含二维码生成、状态轮询及登录凭证提取]
  */
@@ -35,13 +35,15 @@ import (
 )
 
 const (
+	// QRCodeSavePath 登录二维码的临时落盘路径，登录结束（成功或失败）后会删除。
 	QRCodeSavePath = "qrcode.png"
-	UserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	// UserAgent 登录链路使用的浏览器标识，需与网页端 ptlogin 接口保持一致。
+	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-// LoginHandler 处理 QQ 空间扫码登录相关的全部交互逻辑
+// LoginHandler 处理 QQ 空间扫码登录相关的全部交互逻辑。
 type LoginHandler struct {
-	http *ihttp.Client
+	http *ihttp.Client // 请求 ptlogin / xlogin 所用的 HTTP 客户端
 }
 
 // NewLoginHandler 初始化一个新的登录处理器
@@ -73,6 +75,8 @@ func (q *LoginHandler) Login(ctx context.Context) (map[string]string, error) {
 	}, nil
 }
 
+// loopUntilLogin 轮询二维码直到登录成功或上下文取消。
+// 二维码过期（状态 65）会重新拉 login_sig 并换一张码；成功时返回昵称、跳转地址和已捕获的 Cookie。
 func (q *LoginHandler) loopUntilLogin(ctx context.Context) (map[string]string, error) {
 StartLoop:
 	loginSig, err := q.getLoginSig(ctx)
@@ -85,6 +89,7 @@ StartLoop:
 		return nil, err
 	}
 
+	// qrsig 写在 ptqrshow 的 Set-Cookie 里，后续轮询必须原样带上。
 	var qrsig string
 	for _, cookie := range header.Values("Set-Cookie") {
 		if val := extractCookieValue(cookie, "qrsig"); val != "" {
@@ -112,7 +117,7 @@ StartLoop:
 			return nil, err
 		}
 
-		// 捕获 checkLoginStatus 返回的 Cookie (如 ptcz, RK)
+		// 确认登录前后 ptlogin 会下发 ptcz、RK，后续换 p_skey 时要一起带上。
 		for _, c := range header.Values("Set-Cookie") {
 			for _, key := range []string{"ptcz", "RK"} {
 				if val := extractCookieValue(c, key); val != "" {
@@ -121,6 +126,7 @@ StartLoop:
 			}
 		}
 
+		// ptqrlogin 返回 JSONP：ptuiCB('状态','...','跳转URL',...,'昵称')
 		content := str[strings.Index(str, "(")+1 : strings.LastIndex(str, ")")]
 		s := strings.Split(content, ",")
 		for i := range s {
@@ -128,19 +134,19 @@ StartLoop:
 		}
 
 		switch s[0] {
-		case "65":
+		case "65": // 二维码过期
 			fmt.Println(time.Now().Format("15:04:05"), "二维码失效，正在重新生成...")
 			goto StartLoop
-		case "66":
+		case "66": // 等待扫码；只在第一次打印终端二维码，避免刷屏
 			if isFirstLoop {
 				fmt.Println(time.Now().Format("15:04:05"), "二维码已生成，请扫码登录")
 				q.printQRCodeToTerminal()
 			}
 			isFirstLoop = false
-		case "67":
+		case "67": // 已扫码，等待手机确认
 			fmt.Println(time.Now().Format("15:04:05"), "已扫码，请在手机上点击确认")
 			isFirstLoop = true
-		case "0":
+		case "0": // 登录成功，s[2] 是换票跳转地址
 			nickname := ""
 			if len(s) >= 6 {
 				nickname = s[5]
@@ -183,6 +189,7 @@ func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig
 
 // downloadQRCode 获取最新的 QQ 空间登录二维码图片流，并落盘保存
 func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) {
+	// t 是随机数，防止中间层把过期二维码缓存下来。
 	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=%f&daid=5&pt_3rd_aid=0", rand.Float64())
 	header, body, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
 	if err != nil {
@@ -205,6 +212,8 @@ func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) 
 	return header, nil
 }
 
+// getLoginSig 访问 xlogin 页面，从 Set-Cookie 取出 pt_login_sig。
+// 该签名要原样传给 ptqrlogin，否则轮询会被服务端拒绝。
 func (q *LoginHandler) getLoginSig(ctx context.Context) (string, error) {
 	apiURL := "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?proxy_url=https://qzs.qq.com/qzone/v6/portal/proxy.html&daid=5&&hide_title_bar=1&low_login=0&qlogin_auto_login=1&no_verifyimg=1&link_target=blank&appid=549000912&style=22&target=self&s_url=https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone&pt_qr_app=手机QQ空间&pt_qr_link=https://z.qzone.com/download.html&self_regurl=https://qzs.qq.com/qzone/v6/reg/index.html&pt_qr_help_link=https://z.qzone.com/download.html&pt_no_auth=0"
 	header, _, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
@@ -229,6 +238,7 @@ func (q *LoginHandler) getLoginSig(ctx context.Context) (string, error) {
 	return loginSig, nil
 }
 
+// getCredentials 访问扫码成功后的跳转地址，收集空间接口所需 Cookie，并用 p_skey 算出 g_tk。
 func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, initialCookies string) (map[string]string, error) {
 	headers := map[string]string{
 		"User-Agent": UserAgent,
@@ -237,10 +247,7 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 		headers["Cookie"] = initialCookies
 	}
 
-	// 使用自定义客户端执行请求，因为它内部已经集成了 resty，可以自动处理重定向或我们可以配置它
-	// 但原本的代码手动创建了一个 http.Client 并禁用了重定向
-	// 我们可以直接使用 resty 禁重定向的功能，或者继续使用标准库但带上 context
-
+	// 关键凭证写在 302 的 Set-Cookie 上。若自动跟随跳转，这些头会被后续响应盖掉。
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -262,7 +269,6 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 	defer resp.Body.Close()
 
 	cookiesMap := make(map[string]string)
-	// 解析初始 Cookie
 	if initialCookies != "" {
 		for _, part := range strings.Split(initialCookies, ";") {
 			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
@@ -273,6 +279,7 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 	}
 
 	var pSkey string
+	// 空间 CGI 实际会用到的登录 Cookie；其它 Set-Cookie 忽略以免把串撑得过长。
 	needs := map[string]bool{
 		"uin": true, "skey": true, "p_uin": true, "pt4_token": true, "p_skey": true,
 		"ptcz": true, "RK": true, "pt2ggid": true, "pgv_pvid": true,
@@ -320,19 +327,17 @@ func (q *LoginHandler) printQRCodeToTerminal() {
 	}
 	defer fi.Close()
 
-	// 解码图片获取真实的授权链接
+	// 先从图片解出授权 URL，再用 go-qrcode 画成终端字符块。
 	qrmatrix, err := qrcode.Decode(fi)
 	if err != nil {
 		return
 	}
 
-	// 恢复到最稳定且美观的 goqrcode 渲染方式，使用 Low 级别以尽量减小体积
 	qr, err := goqrcode.New(qrmatrix.Content, goqrcode.Low)
 	if err != nil {
 		return
 	}
-	// 默认包含白边（Quiet Zone），呈现出你喜欢的“白色小卡片”视觉效果
-	// 使用 Println 确保二维码打印完后换行，使后续日志内容从新行开始
+	// Low 纠错让图案更小；ToSmallString(false) 保留白边，手机扫码更稳。
 	fmt.Println(strings.TrimRight(qr.ToSmallString(false), "\n"))
 }
 

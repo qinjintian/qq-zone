@@ -25,71 +25,88 @@ import (
 	"github.com/qinjintian/qq-zone/internal/pkg/util"
 )
 
+// 任务记录目录，相对进程工作目录。每个任务一个独立 JSON，便于按 ID 直接定位。
 const taskRecordDir = "storage/tasks"
 
-// TaskMode 用于区分本次任务是完整下载还是失败项重试。
+// TaskMode 区分这次任务是「完整备份」还是「只重试上次失败的文件」。
 type TaskMode string
 
 const (
-	TaskModeBackup      TaskMode = "backup"
-	TaskModeRetryFailed TaskMode = "retry_failed"
+	TaskModeBackup      TaskMode = "backup"       // 按相册列表完整跑一遍
+	TaskModeRetryFailed TaskMode = "retry_failed" // 只下载源任务里还没解决的失败项
 )
 
-// TaskStatus 表示任务最终状态。
+// TaskStatus 是任务落盘时的最终（或进行中）状态，由 CLI 根据下载结果判定后写入。
 type TaskStatus string
 
 const (
-	TaskStatusPending   TaskStatus = "pending"
-	TaskStatusSuccess   TaskStatus = "success"
-	TaskStatusPartial   TaskStatus = "partial"
-	TaskStatusFailed    TaskStatus = "failed"
-	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusPending   TaskStatus = "pending"   // 任务已创建、下载尚未结束（启动时先写一条占位记录）
+	TaskStatusSuccess   TaskStatus = "success"   // 全部成功，或重试后源任务的待处理失败项已清空
+	TaskStatusPartial   TaskStatus = "partial"   // 有成功也有失败，通常还能再重试
+	TaskStatusFailed    TaskStatus = "failed"    // 异常中断且几乎没有成功项
+	TaskStatusCancelled TaskStatus = "cancelled" // 用户取消（例如 Ctrl+C）
 )
 
-// TaskConfigSnapshot 固化单次任务执行时使用的关键配置，便于后续复盘与失败重试。
+// TaskConfigSnapshot 固化本次任务启动时用到的关键配置。
+// 重试时会从源任务读回这些值，避免用户后来改了全局配置，导致重试行为和当初不一致。
 type TaskConfigSnapshot struct {
-	TaskLimit              int  `json:"task_limit"`
-	EnableDynamicTaskLimit bool `json:"enable_dynamic_task_limit"`
-	EnableTimeline         bool `json:"enable_timeline"`
-	EnableMetadataExport   bool `json:"enable_metadata_export"`
-	Exclude                bool `json:"exclude"`
+	TaskLimit              int  `json:"task_limit"`                // 并发下载数
+	EnableDynamicTaskLimit bool `json:"enable_dynamic_task_limit"` // 是否按网速自动加减并发
+	EnableTimeline         bool `json:"enable_timeline"`           // 是否按年/月整理目录
+	EnableMetadataExport   bool `json:"enable_metadata_export"`    // 是否额外导出相册 JSON 元数据
+	Exclude                bool `json:"exclude"`                   // true 表示增量：本地已有文件则跳过
 }
 
-// TaskSummary 记录单次任务的执行结果摘要。
+// TaskSummary 是一次运行结束后的计数摘要，字段含义与 DownloadResult 对齐。
 type TaskSummary struct {
-	Total      uint64 `json:"total"`
-	Success    uint64 `json:"success"`
-	NewAdded   uint64 `json:"new_added"`
-	Skipped    uint64 `json:"skipped"`
-	Failed     uint64 `json:"failed"`
-	VideoCount uint64 `json:"video_count"`
-	ImageCount uint64 `json:"image_count"`
-	BytesDone  uint64 `json:"bytes_done"`
+	Total      uint64 `json:"total"`       // 计划处理的文件数
+	Success    uint64 `json:"success"`     // 成功落盘（含增量跳过）
+	NewAdded   uint64 `json:"new_added"`   // 本次新下载的文件数（不含跳过）
+	Skipped    uint64 `json:"skipped"`     // 因本地已存在而跳过
+	Failed     uint64 `json:"failed"`      // 本次失败数
+	VideoCount uint64 `json:"video_count"` // 成功处理的视频（含实况图视频）
+	ImageCount uint64 `json:"image_count"` // 成功处理的静态图
+	BytesDone  uint64 `json:"bytes_done"`  // 实际写入磁盘的字节数
 }
 
-// TaskRecord 是单次备份任务的持久化记录。
+// TaskRecord 是单次备份或重试任务的完整落盘结构。
 type TaskRecord struct {
-	ID              string             `json:"id"`
-	SourceTaskID    string             `json:"source_task_id,omitempty"`
-	Mode            TaskMode           `json:"mode"`
-	Status          TaskStatus         `json:"status"`
-	CreatedAt       time.Time          `json:"created_at"`
-	FinishedAt      time.Time          `json:"finished_at,omitempty"`
-	OperatorUin     string             `json:"operator_uin"`
-	TargetUin       string             `json:"target_uin"`
-	Albums          []string           `json:"albums,omitempty"`
-	Config          TaskConfigSnapshot `json:"config"`
-	Summary         TaskSummary        `json:"summary"`
-	FailedItems     []FailedItem       `json:"failed_items,omitempty"`
-	OpenFailedItems []FailedItem       `json:"open_failed_items,omitempty"`
-	Error           string             `json:"error,omitempty"`
-	ResolvedByTask  string             `json:"resolved_by_task,omitempty"`
-	Path            string             `json:"-"`
+	ID           string     `json:"id"`                       // 任务 ID，也是文件名（不含 .json）
+	SourceTaskID string     `json:"source_task_id,omitempty"` // 仅重试任务有值：指向被重试的那条源任务
+	Mode         TaskMode   `json:"mode"`
+	Status       TaskStatus `json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
+	FinishedAt   time.Time  `json:"finished_at,omitempty"` // pending 时为空；结束后才写入
+
+	// OperatorUin 是当前登录的 QQ；TargetUin 是被备份的空间主人。
+	// 自己备份自己时两者相同，备份好友空间时不同。查找可重试任务按 OperatorUin 过滤。
+	OperatorUin string `json:"operator_uin"`
+	TargetUin   string `json:"target_uin"`
+
+	// 本次勾选的相册名。空切片表示当时选了「全部相册」。
+	Albums []string `json:"albums,omitempty"`
+
+	Config  TaskConfigSnapshot `json:"config"`
+	Summary TaskSummary        `json:"summary"`
+
+	// FailedItems 是本次运行产生的失败清单，只做历史记录，Finalize 写完后不再改。
+	FailedItems []FailedItem `json:"failed_items,omitempty"`
+	// OpenFailedItems 是「还没重试成功」的失败项。菜单里「重试失败」读的就是这个字段。
+	// 后续重试任务会通过 ResolveOpenFailures 把它改成「仍然失败」的子集。
+	OpenFailedItems []FailedItem `json:"open_failed_items,omitempty"`
+
+	Error          string `json:"error,omitempty"`            // 任务级异常（不是单个文件失败）
+	ResolvedByTask string `json:"resolved_by_task,omitempty"` // 最近一次回写 OpenFailedItems 的重试任务 ID
+
+	// Path 是本地 JSON 路径，只在内存里用，不写入文件。
+	Path string `json:"-"`
 }
 
-// NewTaskRecord 创建一个新的任务记录骨架。
+// NewTaskRecord 创建一条尚未开始下载的任务骨架（status=pending），并预先算好落盘路径。
+// albums 会拷贝一份，避免调用方后续改切片影响到已创建的记录。
 func NewTaskRecord(mode TaskMode, operatorUin string, targetUin string, albums []string, cfg *Config, exclude bool) *TaskRecord {
 	now := time.Now()
+	// ID = 可读时间戳 + 短哈希，既方便按时间扫文件，又避免同一秒内撞名。
 	idSeed := operatorUin + "_" + targetUin + "_" + now.Format(time.RFC3339Nano)
 
 	record := &TaskRecord{
@@ -116,7 +133,8 @@ func NewTaskRecord(mode TaskMode, operatorUin string, targetUin string, albums [
 	return record
 }
 
-// NewRetryTaskRecord 基于原始任务创建新的失败项重试记录。
+// NewRetryTaskRecord 为「重试源任务的 OpenFailedItems」新建一条独立记录。
+// 账号和相册沿用源任务；exclude 固定为 true，因为重试只补失败文件，不应整相册重下。
 func NewRetryTaskRecord(source *TaskRecord, cfg *Config) *TaskRecord {
 	if source == nil {
 		return nil
@@ -127,7 +145,8 @@ func NewRetryTaskRecord(source *TaskRecord, cfg *Config) *TaskRecord {
 	return record
 }
 
-// Finalize 将本次运行结果写回任务记录。
+// Finalize 把一次运行的结果写回内存中的记录，调用方通常紧接着 Save。
+// status=pending 表示任务刚创建、还没跑完：只清 FinishedAt/Error，不覆盖摘要。
 func (r *TaskRecord) Finalize(result *DownloadResult, runErr error, status TaskStatus) {
 	if r == nil {
 		return
@@ -161,11 +180,12 @@ func (r *TaskRecord) Finalize(result *DownloadResult, runErr error, status TaskS
 		ImageCount: result.ImageCount,
 		BytesDone:  result.BytesDone,
 	}
+	// 任务刚结束时，历史失败清单和待重试清单相同；之后只有 OpenFailedItems 会被重试回写改掉。
 	r.FailedItems = cloneFailedItems(result.FailedItems)
 	r.OpenFailedItems = cloneFailedItems(result.FailedItems)
 }
 
-// Save 将任务记录持久化到本地 JSON 文件。
+// Save 把当前记录写成 storage/tasks/<id>.json。目录不存在时会自动创建。
 func (r *TaskRecord) Save() error {
 	if r == nil {
 		return nil
@@ -186,7 +206,7 @@ func (r *TaskRecord) Save() error {
 	return os.WriteFile(r.Path, data, 0644)
 }
 
-// LoadTaskRecord 读取指定 ID 的任务记录。
+// LoadTaskRecord 按任务 ID 读取单条记录。文件不存在或 JSON 损坏时直接返回错误。
 func LoadTaskRecord(taskID string) (*TaskRecord, error) {
 	path := taskRecordPath(taskID)
 	data, err := os.ReadFile(path)
@@ -202,7 +222,8 @@ func LoadTaskRecord(taskID string) (*TaskRecord, error) {
 	return &record, nil
 }
 
-// LoadTaskRecords 返回本地全部任务记录，按创建时间倒序排列。
+// LoadTaskRecords 扫描目录下全部任务记录，按 CreatedAt 从新到旧排序。
+// 单条文件读失败或 JSON 损坏会跳过，避免一条坏记录让整个历史列表不可用。
 func LoadTaskRecords() ([]*TaskRecord, error) {
 	entries, err := os.ReadDir(taskRecordDir)
 	if err != nil {
@@ -238,7 +259,8 @@ func LoadTaskRecords() ([]*TaskRecord, error) {
 	return records, nil
 }
 
-// FindLatestRetryableTask 返回当前账号下最近一条仍存在待处理失败项的任务。
+// FindLatestRetryableTask 返回当前登录账号下、仍有 OpenFailedItems 的最新一条任务。
+// 列表已按时间倒序，所以第一个命中的就是最近可重试的。
 func FindLatestRetryableTask(operatorUin string) (*TaskRecord, error) {
 	records, err := LoadTaskRecords()
 	if err != nil {
@@ -258,7 +280,7 @@ func FindLatestRetryableTask(operatorUin string) (*TaskRecord, error) {
 	return nil, nil
 }
 
-// ListRetryableTasks 返回当前账号下全部仍存在待处理失败项的任务，按创建时间倒序排列。
+// ListRetryableTasks 返回当前登录账号下所有还能重试的任务（OpenFailedItems 非空），同样按时间倒序。
 func ListRetryableTasks(operatorUin string) ([]*TaskRecord, error) {
 	records, err := LoadTaskRecords()
 	if err != nil {
@@ -279,7 +301,9 @@ func ListRetryableTasks(operatorUin string) ([]*TaskRecord, error) {
 	return retryable, nil
 }
 
-// ResolveOpenFailures 用新的失败列表回写源任务的“待处理失败项”状态，形成完整的重试闭环。
+// ResolveOpenFailures 在重试结束后回写「源任务」的待处理失败项。
+// remaining 是这次重试后仍然失败的文件；resolvedByTaskID 是刚跑完的那条重试任务。
+// 全部成功时把源任务标成 success，这样它不会再出现在可重试列表里。
 func ResolveOpenFailures(taskID string, remaining []FailedItem, resolvedByTaskID string) error {
 	record, err := LoadTaskRecord(taskID)
 	if err != nil {
@@ -299,6 +323,8 @@ func taskRecordPath(taskID string) string {
 	return filepath.Join(taskRecordDir, taskID+".json")
 }
 
+// cloneFailedItems 拷贝失败列表，避免调用方后续改切片时连带改掉已落盘/已保存的记录。
+// 空列表返回 nil，这样 JSON 里可以 omitempty 掉这个字段。
 func cloneFailedItems(items []FailedItem) []FailedItem {
 	if len(items) == 0 {
 		return nil
