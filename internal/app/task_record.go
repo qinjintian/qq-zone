@@ -34,6 +34,7 @@ type TaskMode string
 const (
 	TaskModeBackup      TaskMode = "backup"       // 按相册列表完整跑一遍
 	TaskModeRetryFailed TaskMode = "retry_failed" // 只下载源任务里还没解决的失败项
+	TaskModeShuoShuo    TaskMode = "shuoshuo"     // 备份说说并生成本地查看页
 )
 
 // TaskStatus 是任务落盘时的最终（或进行中）状态，由 CLI 根据下载结果判定后写入。

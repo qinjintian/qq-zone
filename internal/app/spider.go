@@ -27,8 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	iurl "net/url"
 	nhttp "net/http"
+	iurl "net/url"
 
 	"github.com/fatih/color"
 	ihttp "github.com/qinjintian/qq-zone/internal/net/http"
@@ -41,9 +41,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// FailedKindShuoShuo 标记这条失败记录来自说说备份，重试时走说说链路而不是相册链路。
+const FailedKindShuoShuo = "shuoshuo"
+
 // FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
-	Album     string `json:"album"`                // 相册名称，失败清单和重试菜单展示用
+	Album     string `json:"album"`                // 相册名称，失败清单和重试菜单展示用；说说固定为「说说」
 	Name      string `json:"name"`                 // 本地保存文件名（失败时也可能是 sloc）
 	Error     string `json:"error"`                // 失败原因
 	TargetUin string `json:"target_uin,omitempty"` // 被备份的 QQ 号
@@ -51,6 +54,10 @@ type FailedItem struct {
 	AlbumRaw  string `json:"album_raw,omitempty"`  // 当时的相册 JSON，重试时还原字段
 	PhotoRaw  string `json:"photo_raw,omitempty"`  // 当时的照片 JSON，重试时重新解析 URL
 	IsVideo   bool   `json:"is_video,omitempty"`   // 是否视频（含按视频链路保存的实况图）
+	Kind      string `json:"kind,omitempty"`       // 空=相册；shuoshuo=说说
+	MoodTID   string `json:"mood_tid,omitempty"`   // 说说 tid，重试时重新拉详情换新地址
+	MediaURL  string `json:"media_url,omitempty"`  // 上次失败时用过的下载地址，详情失败时作兜底
+	MediaID   string `json:"media_id,omitempty"`   // 配图/视频在该条说说里的稳定 id
 }
 
 // DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
