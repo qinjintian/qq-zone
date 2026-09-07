@@ -62,6 +62,9 @@ func writeMoodViewer(root string, file *MoodBackupFile) error {
 	}
 
 	posts := stripMoodURLs(file.Posts)
+	for i := range posts {
+		posts[i] = repairMoodPost(posts[i]) // 生成查看页时再修一次旧备份里的表情和误包 @
+	}
 	byYear := map[string][]MoodPost{}
 	for _, post := range posts {
 		year := "未知"

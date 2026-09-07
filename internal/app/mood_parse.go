@@ -28,6 +28,16 @@ import (
 var (
 	// emotePattern 匹配空间正文里的 [em]e100[/em] 表情码。
 	emotePattern = regexp.MustCompile(`\[em\]e(\d+)\[/em\]`)
+	// wholeMentionHTML 匹配整段 HTML 被包成一个 @ 的错误结果（历史备份）。
+	wholeMentionHTML = regexp.MustCompile(`(?s)^<span class="mention">@?(.*)</span>$`)
+	// emoteImgHTML 空间小黄脸图片；编号对应 qzonestyle 的 eN.gif。
+	emoteImgHTML = `<img class="emote" src="https://qzonestyle.gtimg.cn/qzone/em/e$1.gif" alt="">`
+	// atBracePattern 匹配评论回复里的 @{uin:123,nick:昵称,who:1,auto:1}。
+	atBracePattern = regexp.MustCompile(`@\{([^}]+)\}`)
+	atBraceUin     = regexp.MustCompile(`(?:^|,)uin:(\d+)`)                                    // 从花括号字段里取 QQ 号
+	atBraceNick    = regexp.MustCompile(`(?:^|,)nick:(.*?)(?:,who:|,auto:|$)`)                 // 取 nick，遇 who/auto 结束
+	atBraceAuto    = regexp.MustCompile(`(?:^|,)auto:(\d+)`)                                   // auto:1 表示「回复 xxx」而不是普通 @
+	mentionUinHTML = regexp.MustCompile(`<span class="mention" data-uin="(\d+)">[^<]*</span>`) // 已生成的 @ 标签，用来换成备注名
 	// shanghaiLoc 用于按国内时区切年/月目录和查看页年份导航。
 	shanghaiLoc = func() *time.Location {
 		loc, err := time.LoadLocation("Asia/Shanghai")
@@ -41,14 +51,14 @@ var (
 // parseMoodPost 把列表或详情接口的一条 JSON 收成 MoodPost。
 // extraComments 非空时优先用它（详情接口翻页拼好的评论），否则读 item.commentlist。
 func parseMoodPost(item gjson.Result, extraComments []gjson.Result) MoodPost {
-	created := item.Get("created_time").Int()
+	created := moodUnixTime(item, "created_time", "createdTime")
 	post := MoodPost{
 		TID:          strings.TrimSpace(item.Get("tid").String()),
 		Time:         created,
 		TimeText:     formatMoodTime(created, item.Get("createTime").String()),
 		Source:       strings.TrimSpace(item.Get("source_name").String()),
 		Location:     moodLocation(item.Get("lbs")),
-		LikeCount:    parseLikeCount(item),
+		LikeCount:    parseLikeCount(item), // 列表接口通常没有 like，备份时再走 qz_opcnt2
 		Likes:        parseLikers(item),
 		CommentCount: int(item.Get("cmtnum").Int()),
 		HasMoreCon:   item.Get("has_more_con").Int() != 0,
@@ -57,6 +67,13 @@ func parseMoodPost(item gjson.Result, extraComments []gjson.Result) MoodPost {
 			UIN:  strings.TrimSpace(item.Get("uin").String()),
 			Name: strings.TrimSpace(item.Get("name").String()),
 		},
+	}
+	if post.LikeCount < len(post.Likes) {
+		post.LikeCount = len(post.Likes)
+	}
+	if edited, text := parseMoodEditTime(item, created); edited > 0 || text != "" {
+		post.EditTime = edited
+		post.EditTimeText = text
 	}
 
 	plain, rich := renderMoodContent(item)
@@ -329,6 +346,44 @@ func needMoodPics(post MoodPost) bool {
 	return images < post.PicTotal
 }
 
+// moodRightOnlySelf 是空间 ugc_right / right 里「仅自己可见」的取值。
+const moodRightOnlySelf = 64
+
+// moodHiddenFromViewer 判断当前登录账号是否看不到这条说说。
+// 备份自己的空间时不过滤私密说说；备份好友时仅自己可见、无 tid 的条目直接跳过。
+func moodHiddenFromViewer(item gjson.Result, viewerUin, ownerUin string) bool {
+	if viewerUin != "" && ownerUin != "" && viewerUin == ownerUin {
+		return false
+	}
+	if strings.TrimSpace(item.Get("tid").String()) == "" {
+		return true
+	}
+	if item.Get("secret").Int() == 1 {
+		return true
+	}
+	right := item.Get("ugc_right").Int()
+	if right == 0 {
+		right = item.Get("right").Int()
+	}
+	if right == 0 {
+		right = item.Get("right_info.ugc_right").Int()
+	}
+	if right == moodRightOnlySelf {
+		return true
+	}
+	text := strings.TrimSpace(item.Get("content").String())
+	return strings.Contains(text, "仅自己可见") || strings.Contains(text, "无权查看")
+}
+
+// moodLooksEmpty 这条说说没有正文、配图、转发和分享，详情超时或无权时当作不可见跳过。
+func moodLooksEmpty(post MoodPost) bool {
+	return strings.TrimSpace(post.Content) == "" &&
+		len(post.Media) == 0 &&
+		post.Repost == nil &&
+		strings.TrimSpace(post.ShareURL) == "" &&
+		post.PicTotal == 0
+}
+
 // pickPicURL 按清晰度从高到低挑图片地址：原图 → url3 → 缩略图。
 func pickPicURL(pic gjson.Result) string {
 	for _, key := range []string{"origin_url", "raw", "o_url", "url3", "url2", "url1", "url", "custom_url"} {
@@ -394,10 +449,16 @@ func compactURLs(urls ...string) []string {
 	return out
 }
 
-// parseLikeCount 兼容 like 既可能是对象 {count} 也可能是数字。
+// parseLikeCount 兼容 like.cnt / like.count / 纯数字；空间列表接口实际用得最多的是 cnt。
 func parseLikeCount(item gjson.Result) int {
-	if v := item.Get("like.count"); v.Exists() && v.Type != gjson.Null {
-		return int(v.Int())
+	for _, key := range []string{
+		"like.cnt", "like.count", "like.num", "like.like_num",
+		"like_num", "likenum", "rt_like.cnt", "rt_like.count",
+	} {
+		v := item.Get(key)
+		if v.Exists() && v.Type == gjson.Number {
+			return int(v.Int())
+		}
 	}
 	if v := item.Get("like"); v.Exists() && v.Type == gjson.Number {
 		return int(v.Int())
@@ -405,18 +466,19 @@ func parseLikeCount(item gjson.Result) int {
 	if v := item.Get("likes"); v.Exists() && v.Type == gjson.Number {
 		return int(v.Int())
 	}
-	return int(item.Get("rt_like").Int())
+	return 0
 }
 
-// parseLikers 从列表接口自带的点赞人里取名字；完整点赞名单不另打接口，避免限流。
+// parseLikers 从列表/详情 JSON 里顺手取点赞人。
+// 空间网页实际不靠这些字段：msglist 根本没有 like，备份时会再打 get_like_list_app。
 func parseLikers(item gjson.Result) []MoodPerson {
 	var out []MoodPerson
 	seen := map[string]bool{}
 	addArr := func(arr []gjson.Result) {
 		for _, x := range arr {
 			p := MoodPerson{
-				UIN:  strings.TrimSpace(firstMoodString(x, "uin", "fuin")),
-				Name: strings.TrimSpace(firstMoodString(x, "nick", "name", "nickname")),
+				UIN:  strings.TrimSpace(firstMoodString(x, "fuin", "uin", "user.uin")),
+				Name: strings.TrimSpace(firstMoodString(x, "nick", "name", "nickname", "user.nick")),
 			}
 			key := p.UIN
 			if key == "" {
@@ -431,7 +493,10 @@ func parseLikers(item gjson.Result) []MoodPerson {
 	}
 	addArr(item.Get("like.list").Array())
 	addArr(item.Get("like.info").Array())
+	addArr(item.Get("like.like_uin_info").Array())
+	addArr(item.Get("like.likemans").Array())
 	addArr(item.Get("likemans").Array())
+	addArr(item.Get("like_uin_info").Array())
 	return out
 }
 
@@ -449,23 +514,21 @@ func renderMoodContent(item gjson.Result) (plain, rich string) {
 	if conlist.Exists() && conlist.Type != gjson.Null && len(conlist.Array()) > 0 {
 		var plainB, htmlB strings.Builder
 		conlist.ForEach(func(_, node gjson.Result) bool {
-			typ := node.Get("type").Int()
-			switch typ {
-			case 2:
-				nick := strings.TrimSpace(firstMoodString(node, "nick", "name", "con"))
+			if isMoodAtFriend(node) {
+				nick := strings.TrimSpace(firstMoodString(node, "nick", "name"))
 				if nick == "" {
-					nick = node.Get("uin").String()
+					nick = strings.TrimSpace(node.Get("uin").String())
 				}
 				plainB.WriteString("@" + nick)
 				htmlB.WriteString(`<span class="mention">@` + html.EscapeString(nick) + `</span>`)
-			default:
-				text := node.Get("con").String()
-				if text == "" {
-					text = node.Get("content").String()
-				}
-				plainB.WriteString(text)
-				htmlB.WriteString(moodTextToHTML(text))
+				return true
 			}
+			text := node.Get("con").String()
+			if text == "" {
+				text = node.Get("content").String()
+			}
+			plainB.WriteString(text)
+			htmlB.WriteString(moodTextToHTML(text))
 			return true
 		})
 		return strings.TrimSpace(plainB.String()), htmlB.String()
@@ -478,6 +541,21 @@ func renderMoodContent(item gjson.Result) (plain, rich string) {
 	return strings.TrimSpace(text), moodTextToHTML(text)
 }
 
+// isMoodAtFriend 判断 conlist 节点是不是 @好友。
+// 列表接口常把整段正文标成 type:2 且只有 con，没有 uin；那种要当普通文字，否则表情码不会转成图片。
+func isMoodAtFriend(node gjson.Result) bool {
+	if node.Get("type").Int() != 2 {
+		return false
+	}
+	uin := strings.TrimSpace(node.Get("uin").String())
+	if uin != "" && uin != "0" {
+		return true
+	}
+	nick := strings.TrimSpace(firstMoodString(node, "nick", "name"))
+	con := strings.TrimSpace(firstMoodString(node, "con", "content"))
+	return nick != "" && con == ""
+}
+
 // moodTextToHTML 转义用户正文，换行变成 <br>，空间表情码变成 img。
 func moodTextToHTML(text string) string {
 	if text == "" {
@@ -486,8 +564,213 @@ func moodTextToHTML(text string) string {
 	escaped := html.EscapeString(text)
 	escaped = strings.ReplaceAll(escaped, "\r\n", "\n")
 	escaped = strings.ReplaceAll(escaped, "\n", "<br>")
-	escaped = emotePattern.ReplaceAllString(escaped, `<img class="emote" src="https://qzonestyle.gtimg.cn/qzone/em/e$1.gif" alt="" loading="lazy">`)
-	return escaped
+	escaped = replaceAtBraceTokens(escaped, nil, true)
+	return replaceEmoteCodes(escaped)
+}
+
+// replaceEmoteCodes 把 [em]e120[/em] 换成空间官方表情 gif。
+func replaceEmoteCodes(s string) string {
+	if s == "" || !strings.Contains(strings.ToLower(s), "[em]") {
+		return s
+	}
+	return emotePattern.ReplaceAllString(s, emoteImgHTML)
+}
+
+// parseAtBraceFields 拆 @{uin:...,nick:...,auto:...} 里的 QQ、昵称和是否「回复」前缀。
+func parseAtBraceFields(inner string) (uin, nick string, auto bool) {
+	if m := atBraceUin.FindStringSubmatch(inner); len(m) == 2 {
+		uin = m[1]
+	}
+	if m := atBraceNick.FindStringSubmatch(inner); len(m) == 2 {
+		nick = strings.TrimSpace(m[1])
+	}
+	if m := atBraceAuto.FindStringSubmatch(inner); len(m) == 2 && m[1] != "0" {
+		auto = true
+	}
+	return uin, nick, auto
+}
+
+// displayNameForUin 优先用好友备注，没有备注才用接口昵称，再没有才显示 QQ 号。
+func displayNameForUin(uin, fallback string, names map[string]string) string {
+	if names != nil {
+		if n := strings.TrimSpace(names[uin]); n != "" {
+			return n
+		}
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback
+	}
+	return uin
+}
+
+// mentionHTML 生成查看页里的 @ 标签；data-uin 方便稍后用备注名替换 innerText。
+func mentionHTML(uin, name string) string {
+	return `<span class="mention" data-uin="` + html.EscapeString(uin) + `">` + html.EscapeString(name) + `</span>`
+}
+
+// replaceAtBraceTokens 把 @{uin:...,nick:...} 收成「回复 备注名」或 @名字。
+func replaceAtBraceTokens(s string, names map[string]string, asHTML bool) string {
+	if s == "" || !strings.Contains(s, "@{") {
+		return s
+	}
+	return atBracePattern.ReplaceAllStringFunc(s, func(raw string) string {
+		inner := strings.TrimSuffix(strings.TrimPrefix(raw, "@{"), "}")
+		uin, nick, auto := parseAtBraceFields(inner)
+		display := displayNameForUin(uin, nick, names)
+		if asHTML {
+			tag := mentionHTML(uin, display)
+			if auto {
+				return `<span class="reply-to">回复</span> ` + tag
+			}
+			return `@` + tag
+		}
+		if auto {
+			return "回复 " + display
+		}
+		return "@" + display
+	})
+}
+
+// applyNamesToMentionHTML 已生成的 mention 标签按 data-uin 换成好友备注。
+func applyNamesToMentionHTML(rich string, names map[string]string) string {
+	if rich == "" || names == nil || !strings.Contains(rich, "data-uin=") {
+		return rich
+	}
+	return mentionUinHTML.ReplaceAllStringFunc(rich, func(raw string) string {
+		m := mentionUinHTML.FindStringSubmatch(raw)
+		if len(m) != 2 {
+			return raw
+		}
+		if n := strings.TrimSpace(names[m[1]]); n != "" {
+			return mentionHTML(m[1], n)
+		}
+		return raw
+	})
+}
+
+// rewriteAtUinText 同时改纯文本和 HTML：把 @{uin:...} 收成「回复 备注名」，并给已有 @ 换备注。
+func rewriteAtUinText(rich, plain string, names map[string]string) (string, string) {
+	if rich == "" {
+		rich = moodTextToHTML(plain)
+	} else {
+		rich = replaceAtBraceTokens(rich, names, true)
+	}
+	rich = applyNamesToMentionHTML(rich, names)
+	plain = replaceAtBraceTokens(plain, names, false)
+	return plain, rich
+}
+
+// applyFriendNamesToPosts 用登录账号的好友备注覆盖评论者、点赞人和 @ 里的昵称。
+func applyFriendNamesToPosts(posts []MoodPost, names map[string]string) {
+	if len(posts) == 0 || len(names) == 0 {
+		for i := range posts {
+			posts[i] = applyAtBraceToPost(posts[i], nil)
+		}
+		return
+	}
+	applyPerson := func(p *MoodPerson) {
+		if p == nil || p.UIN == "" {
+			return
+		}
+		if n := strings.TrimSpace(names[p.UIN]); n != "" {
+			p.Name = n // 通讯录有备注就盖掉接口给的昵称
+		}
+	}
+	var walkComments func([]MoodComment)
+	walkComments = func(cs []MoodComment) {
+		for i := range cs {
+			applyPerson(&cs[i].Author)
+			cs[i].Content, cs[i].HTML = rewriteAtUinText(cs[i].HTML, cs[i].Content, names)
+			walkComments(cs[i].Replies)
+		}
+	}
+	for i := range posts {
+		applyPerson(&posts[i].Author)
+		if posts[i].Repost != nil {
+			applyPerson(&posts[i].Repost.Author)
+			posts[i].Repost.Content, posts[i].Repost.HTML = rewriteAtUinText(posts[i].Repost.HTML, posts[i].Repost.Content, names)
+		}
+		for j := range posts[i].Likes {
+			applyPerson(&posts[i].Likes[j])
+		}
+		posts[i].Content, posts[i].HTML = rewriteAtUinText(posts[i].HTML, posts[i].Content, names)
+		walkComments(posts[i].Comments)
+	}
+}
+
+// applyAtBraceToPost 只处理 @{uin:...} 和已有 mention，不改评论者/点赞人姓名（通讯录为空时走这条）。
+func applyAtBraceToPost(p MoodPost, names map[string]string) MoodPost {
+	p.Content, p.HTML = rewriteAtUinText(p.HTML, p.Content, names)
+	if p.Repost != nil {
+		p.Repost.Content, p.Repost.HTML = rewriteAtUinText(p.Repost.HTML, p.Repost.Content, names)
+	}
+	var walk func([]MoodComment) []MoodComment
+	walk = func(cs []MoodComment) []MoodComment {
+		for i := range cs {
+			cs[i].Content, cs[i].HTML = rewriteAtUinText(cs[i].HTML, cs[i].Content, names)
+			cs[i].Replies = walk(cs[i].Replies)
+		}
+		return cs
+	}
+	p.Comments = walk(p.Comments)
+	return p
+}
+
+// repairMoodPost 修正历史备份里「整段正文被当成 @」以及没转成图片的表情码。
+func repairMoodPost(p MoodPost) MoodPost {
+	p.Content, p.HTML = repairMoodRichText(p.HTML, p.Content)
+	if p.Repost != nil {
+		p.Repost.Content, p.Repost.HTML = repairMoodRichText(p.Repost.HTML, p.Repost.Content)
+	}
+	p.Comments = repairMoodComments(p.Comments)
+	return p
+}
+
+// repairMoodComments 递归修正评论和楼中楼里的表情码、误包成 @ 的正文。
+func repairMoodComments(cs []MoodComment) []MoodComment {
+	for i := range cs {
+		cs[i].Content, cs[i].HTML = repairMoodRichText(cs[i].HTML, cs[i].Content)
+		cs[i].Replies = repairMoodComments(cs[i].Replies)
+	}
+	return cs
+}
+
+// repairMoodRichText 拆掉错误的整段 mention 包裹，并把残留的 [em] 码换成图片。
+func repairMoodRichText(rich, plain string) (string, string) {
+	plain = strings.TrimSpace(plain)
+	rich = strings.TrimSpace(rich)
+	if m := wholeMentionHTML.FindStringSubmatch(rich); len(m) == 2 {
+		inner := html.UnescapeString(m[1])
+		if looksLikeMisparsedMoodBody(inner) {
+			plain = strings.TrimPrefix(plain, "@")
+			if strings.TrimSpace(plain) == "" {
+				plain = inner
+			}
+			plain = strings.TrimSpace(plain)
+			rich = moodTextToHTML(inner)
+		}
+	}
+	if rich == "" {
+		rich = moodTextToHTML(plain)
+	} else {
+		rich = replaceEmoteCodes(rich)
+	}
+	return rewriteAtUinText(rich, plain, nil)
+}
+
+// looksLikeMisparsedMoodBody 整段被包成 mention 时，用话题、表情码或长度判断这是正文而不是好友昵称。
+func looksLikeMisparsedMoodBody(s string) bool {
+	s = strings.TrimSpace(strings.TrimPrefix(s, "@"))
+	if s == "" {
+		return false
+	}
+	if strings.Contains(s, "[em]") || strings.Contains(s, "<img") || strings.Contains(s, "\n") {
+		return true
+	}
+	if strings.HasPrefix(s, "#") {
+		return true
+	}
+	return len([]rune(s)) > 16
 }
 
 // formatMoodTime 用东八区格式化 unix 时间；没有时间戳时退回接口给的中文日期。
@@ -496,6 +779,45 @@ func formatMoodTime(ts int64, fallback string) string {
 		return time.Unix(ts, 0).In(shanghaiLoc).Format("2006-01-02 15:04")
 	}
 	return strings.TrimSpace(fallback)
+}
+
+// moodUnixTime 从候选字段取 unix 秒；接口有时给毫秒，大于 1e12 时先除掉。
+func moodUnixTime(item gjson.Result, keys ...string) int64 {
+	for _, key := range keys {
+		v := item.Get(key)
+		if !v.Exists() || v.Type == gjson.Null {
+			continue
+		}
+		n := v.Int()
+		if n <= 0 {
+			continue
+		}
+		if n > 1e12 {
+			n /= 1000
+		}
+		return n
+	}
+	return 0
+}
+
+// parseMoodEditTime 取出最后编辑时间。未改过、或只比发表时间晚几秒的忽略，避免把接口抖动当成编辑。
+func parseMoodEditTime(item gjson.Result, created int64) (int64, string) {
+	edited := moodUnixTime(item, "modifytime", "modify_time", "edit_time", "edittime", "lastedittime", "update_time", "updatetime")
+	if edited > 0 && created > 0 && edited <= created+60 {
+		edited = 0
+	}
+	text := ""
+	if edited > 0 {
+		text = formatMoodTime(edited, "")
+	}
+	if text == "" {
+		fallback := firstMoodString(item, "modifyTime", "editTime", "lastEditTime")
+		createText := strings.TrimSpace(item.Get("createTime").String())
+		if fallback != "" && fallback != createText {
+			text = fallback
+		}
+	}
+	return edited, text
 }
 
 // firstMoodString 按候选字段名取第一个非空字符串，用来兼容接口字段别名。
@@ -537,7 +859,8 @@ func collectMediaPtrs(posts []MoodPost) []*MoodMedia {
 	return out
 }
 
-// collectPeople 按 QQ 号去重，收集需要下头像的作者、评论者和点赞者。
+// collectPeople 按 QQ 号去重，收集需要下头像的作者和评论者。
+// 点赞栏只展示名字，不把头像人算进来，避免一条热门说说拖上几十个头像请求。
 func collectPeople(posts []MoodPost) []MoodPerson {
 	seen := map[string]MoodPerson{}
 	add := func(p MoodPerson) {
@@ -563,9 +886,6 @@ func collectPeople(posts []MoodPost) []MoodPerson {
 		add(p.Author)
 		if p.Repost != nil {
 			add(p.Repost.Author)
-		}
-		for _, like := range p.Likes {
-			add(like)
 		}
 		walkComments(p.Comments)
 	}

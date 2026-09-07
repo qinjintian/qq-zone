@@ -24,7 +24,18 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const moodPageSize = 20 // 网页端说说列表一页条数；pos 必须按这个步长加，不能按返回条数加
+const (
+	moodPageSize   = 20               // 网页端说说列表一页条数；pos 必须按这个步长加，不能按返回条数加
+	moodCGITimeout = 20 * time.Second // 单次说说 CGI 超时；无权查看的详情接口有时会一直不关连接
+)
+
+// moodCGIContext 给说说列表/详情/配图请求加上超时，避免一条不可见说说把整次备份卡住。
+func moodCGIContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, moodCGITimeout)
+}
 
 // MoodListPage 是 emotion_cgi_msglist_v6 一页的解析结果。
 type MoodListPage struct {
@@ -62,8 +73,11 @@ func (c *Client) GetMoodList(ctx context.Context, targetUin string, pos int) (*M
 	apiURL := "https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6?" + params.Encode()
 	headers := c.moodHeaders(targetUin)
 
+	cgiCtx, cancel := moodCGIContext(ctx)
+	defer cancel()
+
 	start := time.Now()
-	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
+	_, body, code, err := c.Http.Get(cgiCtx, apiURL, headers)
 	bodyStr := string(body)
 	c.logAPI("GetMoodList", apiURL, headers, bodyStr, code, time.Since(start), err)
 
@@ -176,8 +190,11 @@ func (c *Client) getMoodDetailPage(ctx context.Context, targetUin, tid string, p
 	apiURL := "https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6?" + params.Encode()
 	headers := c.moodHeaders(targetUin)
 
+	cgiCtx, cancel := moodCGIContext(ctx)
+	defer cancel()
+
 	start := time.Now()
-	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
+	_, body, code, err := c.Http.Get(cgiCtx, apiURL, headers)
 	bodyStr := string(body)
 	c.logAPI("GetMoodDetail", apiURL, headers, bodyStr, code, time.Since(start), err)
 
@@ -214,8 +231,11 @@ func (c *Client) GetMoodPics(ctx context.Context, targetUin, tid string) ([]stri
 	apiURL := "https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_get_pics_v6?" + params.Encode()
 	headers := c.moodHeaders(targetUin)
 
+	cgiCtx, cancel := moodCGIContext(ctx)
+	defer cancel()
+
 	start := time.Now()
-	_, body, code, err := c.Http.Get(ctx, apiURL, headers)
+	_, body, code, err := c.Http.Get(cgiCtx, apiURL, headers)
 	bodyStr := string(body)
 	c.logAPI("GetMoodPics", apiURL, headers, bodyStr, code, time.Since(start), err)
 
@@ -261,16 +281,28 @@ func (c *Client) moodHeaders(targetUin string) map[string]string {
 func moodAPIError(code int64, res gjson.Result) error {
 	msg := strings.TrimSpace(firstNonEmpty(res.Get("message").String(), res.Get("msg").String(), res.Get("subcode").String()))
 	switch code {
-	case -3000, -4001:
+	case -3000, -4001, -87998:
 		return fmt.Errorf("登录已失效，请重新扫码 (code: %d)", code)
-	case -4009, -10000:
-		return fmt.Errorf("没有权限查看该空间的说说 (code: %d %s)", code, msg)
+	case -4009, -10000, -3001, -3002:
+		return fmt.Errorf("没有权限查看该说说 (code: %d %s)", code, msg)
 	default:
 		if msg == "" {
 			msg = "unknown"
 		}
 		return fmt.Errorf("说说接口错误 (code: %d): %s", code, msg)
 	}
+}
+
+// IsMoodPermissionError 判断是否为「这条说说当前账号看不到」，备份时应跳过而不是当任务失败。
+func IsMoodPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "没有权限") ||
+		strings.Contains(msg, "不存在") ||
+		strings.Contains(msg, "无权") ||
+		strings.Contains(msg, "不可见")
 }
 
 // parseCGIBody 兼容 JSONP 和裸 JSON。空间说说接口两种都会出现。

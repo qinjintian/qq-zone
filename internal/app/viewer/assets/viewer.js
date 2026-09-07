@@ -37,6 +37,22 @@
       .replace(/"/g, "&quot;");
   }
 
+  function emoteHtml(s) {
+    return String(s == null ? "" : s).replace(/\[em\]e(\d+)\[\/em\]/gi,
+      '<img class="emote" src="https://qzonestyle.gtimg.cn/qzone/em/e$1.gif" alt="">');
+  }
+
+  function atUinHtml(s) {
+    return String(s == null ? "" : s).replace(/@\{uin:(\d+),nick:(.*?),who:\d+,auto:\d+\}/g, function (_, uin, nick) {
+      return '<span class="reply-to">回复</span> <span class="mention">' + escapeHtml(nick) + "</span>";
+    });
+  }
+
+  function richText(html, content) {
+    var s = html || escapeHtml(content || "").replace(/\n/g, "<br>");
+    return emoteHtml(atUinHtml(s));
+  }
+
   function initial(name) {
     var s = (name || "?").trim();
     return escapeHtml(s.charAt(0) || "?");
@@ -53,6 +69,7 @@
   function haystack(p) {
     var parts = [p.content, p.location, p.source, p.share_title];
     if (p.author) parts.push(p.author.name);
+    (p.likes || []).forEach(function (x) { parts.push(x && x.name); });
     if (p.repost) parts.push(p.repost.content, p.repost.author && p.repost.author.name);
     (p.comments || []).forEach(function walk(c) {
       parts.push(c.content, c.author && c.author.name);
@@ -134,7 +151,7 @@
     }
     return '<div class="comment">' + avatarHtml(c.author, "avatar") +
       '<div class="c-body"><span class="c-name">' + escapeHtml((c.author && c.author.name) || "") + "</span>" +
-      (c.html || escapeHtml(c.content || "").replace(/\n/g, "<br>")) +
+      (richText(c.html, c.content)) +
       '<span class="c-time">' + escapeHtml(c.time_text || "") + "</span>" + media + replies + "</div></div>";
   }
 
@@ -149,28 +166,47 @@
         (rest ? '<div class="more" hidden>' + rest + '</div><button type="button" class="toggle" data-more>查看全部 ' + comments.length + " 条评论</button>" : "") +
         "</div>";
     }
-    var likeText = p.like_count ? p.like_count + " 赞" : "";
+    var likeBlock = "";
+    var likeCount = p.like_count || 0;
     if (p.likes && p.likes.length) {
-      likeText = p.likes.slice(0, 8).map(function (x) { return x.name; }).join("、") +
-        (p.like_count > p.likes.length ? " 等" + p.like_count + "人" : "") + " 觉得很赞";
+      var names = p.likes.map(function (x) { return x.name || x.uin; }).filter(Boolean);
+      var extra = likeCount ? " 共" + likeCount + "人觉得很赞" : " 觉得很赞";
+      likeBlock = '<div class="likes"><span class="likes-mark">赞</span><span class="likes-text">' +
+        names.map(function (n) { return '<span class="like-name">' + escapeHtml(n) + "</span>"; }).join("、") +
+        extra + "</span></div>";
+    } else if (likeCount) {
+      likeBlock = '<div class="likes"><span class="likes-mark">赞</span><span class="likes-text">共' +
+        likeCount + "人觉得很赞</span></div>";
     }
+    var statsParts = [];
+    if (p.visit_count) statsParts.push("浏览" + p.visit_count + "次");
+    if (likeCount) statsParts.push("赞(" + likeCount + ")");
+    if (p.comment_count) statsParts.push(p.comment_count + " 条评论");
+    var stats = statsParts.length
+      ? '<div class="stats">' + statsParts.map(function (s) { return "<span>" + escapeHtml(s) + "</span>"; }).join("") + "</div>"
+      : "";
     var loc = p.location ? "<span>" + escapeHtml(p.location) + "</span>" : "";
     var src = p.source ? "<span>" + escapeHtml(p.source) + "</span>" : "";
+    var when = "";
+    if (p.edit_time_text) {
+      if (p.time_text) when += "<span>发布于 " + escapeHtml(p.time_text) + "</span>";
+      when += "<span>编辑于 " + escapeHtml(p.edit_time_text) + "</span>";
+    } else if (p.time_text) {
+      when += "<span>" + escapeHtml(p.time_text) + "</span>";
+    }
     var share = p.share_title ? '<a class="share-link" href="' + escapeHtml(p.share_url || "#") + '">' + escapeHtml(p.share_title) + "</a>" : "";
     var repost = "";
     if (p.repost) {
       repost = '<div class="repost"><div class="name">' + escapeHtml((p.repost.author && p.repost.author.name) || "原说说") +
-        "</div><div class=\"content\">" + (p.repost.html || escapeHtml(p.repost.content || "")) + "</div>" +
+        "</div><div class=\"content\">" + richText(p.repost.html, p.repost.content) + "</div>" +
         mediaGrid(p.repost.media, pid + "-rt") + "</div>";
     }
     return '<article class="card" data-id="' + escapeHtml(p.tid || pid) + '">' +
       '<div class="card-head">' + avatarHtml(p.author, "avatar") +
       '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + "</div>" +
-      '<div class="when"><span>' + escapeHtml(p.time_text || "") + "</span>" + loc + src + "</div></div></div>" +
-      '<div class="content">' + (p.html || escapeHtml(p.content || "").replace(/\n/g, "<br>")) + "</div>" +
-      share + mediaGrid(p.media, pid) + repost +
-      '<div class="stats"><span>' + escapeHtml(likeText) + "</span><span>" +
-      (p.comment_count ? p.comment_count + " 条评论" : "") + "</span></div>" +
+      '<div class="when">' + when + loc + src + "</div></div></div>" +
+      '<div class="content">' + richText(p.html, p.content) + "</div>" +
+      share + mediaGrid(p.media, pid) + repost + stats + likeBlock +
       commentBlock + "</article>";
   }
 

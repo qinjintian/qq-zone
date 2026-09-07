@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 17:10:00
+ * @LastEditTime: 2026-09-07 22:00:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -130,7 +130,8 @@ func (c *CLI) Menu(ctx context.Context) {
 		}
 
 		prompt := &survey.Select{
-			Message: color.New(color.FgCyan, color.Bold).Sprint(menuMsg),
+			Message:  color.New(color.FgCyan, color.Bold).Sprint(menuMsg),
+			PageSize: 10,
 			Options: []string{
 				"🏠 下载自己的相册",
 				"💬 备份自己的说说",
@@ -175,7 +176,8 @@ func (c *CLI) Menu(ctx context.Context) {
 			},
 		}
 
-		if err := survey.AskOne(prompt, &option, survey.WithIcons(func(icons *survey.IconSet) {
+		fmt.Println()
+		if err := askOne(prompt, &option, survey.WithIcons(func(icons *survey.IconSet) {
 			icons.Question.Text = "❓"
 			icons.SelectFocus.Text = "▶"
 		})); err != nil {
@@ -209,7 +211,7 @@ func (c *CLI) Menu(ctx context.Context) {
 				}
 			}
 			var targetUin string
-			survey.AskOne(&survey.Input{
+			askOne(&survey.Input{
 				Message: color.New(color.FgCyan).Sprint("请输入目标 QQ 号:"),
 			}, &targetUin, survey.WithValidator(survey.Required))
 			c.handleSpider(ctx, targetUin)
@@ -220,7 +222,7 @@ func (c *CLI) Menu(ctx context.Context) {
 				}
 			}
 			var targetUin string
-			survey.AskOne(&survey.Input{
+			askOne(&survey.Input{
 				Message: color.New(color.FgCyan).Sprint("请输入目标 QQ 号:"),
 			}, &targetUin, survey.WithValidator(survey.Required))
 			targetUin = strings.TrimSpace(targetUin)
@@ -285,11 +287,12 @@ func (c *CLI) ensureLogin(ctx context.Context) error {
 
 	var choice string
 	prompt := &survey.Select{
-		Message: "检测到历史登录记录，请选择账号:",
-		Options: options,
+		Message:  "检测到历史登录记录，请选择账号:",
+		Options:  options,
+		PageSize: 10,
 	}
 
-	if err := survey.AskOne(prompt, &choice, survey.WithIcons(func(icons *survey.IconSet) {
+	if err := askOne(prompt, &choice, survey.WithIcons(func(icons *survey.IconSet) {
 		icons.Question.Text = "🔑"
 		icons.SelectFocus.Text = "▶"
 	})); err != nil {
@@ -445,7 +448,7 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	})
 
 	// 使用批量提问模式，这是解决 Windows 终端重复输出和空行问题的最稳健方案
-	if err := survey.Ask(questions, &answers, opts, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
+	if err := ask(questions, &answers, opts, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
 		return
 	}
 
@@ -464,7 +467,12 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	exclude := answers.Exclude
 
 	c.logger.Infof("📡 正在从腾讯服务器拉取相册列表...")
-	allAlbums, err := c.client.GetAlbumList(ctx, targetUin)
+	var allAlbums []gjson.Result
+	err := app.WithWaitSpinner(ctx, "正在拉取相册列表", func() error {
+		var listErr error
+		allAlbums, listErr = c.client.GetAlbumList(ctx, targetUin)
+		return listErr
+	})
 	if err != nil {
 		c.logger.Errorf("❌ 获取相册列表失败: %v", err)
 		return
@@ -502,7 +510,7 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 		icons.UnmarkedOption.Text = "⬜"
 	})
 
-	if err := survey.AskOne(promptSelect, &selectedLabels, iconOpt); err != nil {
+	if err := askOne(promptSelect, &selectedLabels, iconOpt); err != nil {
 		return
 	}
 
@@ -591,7 +599,7 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 	options = append(options, "↩ 返回上一级")
 
 	var selected string
-	if err := survey.AskOne(&survey.Select{
+	if err := askOne(&survey.Select{
 		Message:  "请选择要重试的历史任务:",
 		Options:  options,
 		PageSize: 10,
@@ -611,7 +619,7 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 	c.logger.Infof("📦 已选择任务 [%s]，目标账号 [%s]，待重试 %d 个文件", record.ID, color.YellowString(record.TargetUin), len(record.OpenFailedItems))
 
 	confirm := false
-	if err := survey.AskOne(&survey.Confirm{
+	if err := askOne(&survey.Confirm{
 		Message: fmt.Sprintf("是否立即重试任务 [%s] 的 %d 个失败文件？", record.ID, len(record.OpenFailedItems)),
 		Default: true,
 	}, &confirm); err != nil || !confirm {
@@ -756,7 +764,7 @@ func (c *CLI) handleAccessList(ctx context.Context) {
 
 	// 增加一个确认环节
 	confirm := false
-	survey.AskOne(&survey.Confirm{
+	askOne(&survey.Confirm{
 		Message: "确定要开始扫描吗？(建议不要频繁执行)",
 		Default: true,
 	}, &confirm)
