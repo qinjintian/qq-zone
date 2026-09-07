@@ -32,7 +32,7 @@ const (
 // MoodPerson 是说说里出现的一个人：作者、评论者或点赞者。
 type MoodPerson struct {
 	UIN    string `json:"uin"`              // QQ 号，下载头像和去重用
-	Name   string `json:"name"`             // 当时记下的昵称
+	Name   string `json:"name"`             // 展示名：好友备注优先，没有备注才用昵称
 	Avatar string `json:"avatar,omitempty"` // 相对查看页的头像路径，下载失败则为空
 }
 
@@ -72,24 +72,27 @@ type MoodRepost struct {
 
 // MoodPost 是给查看页用的一条规范化说说。
 type MoodPost struct {
-	TID          string        `json:"tid"`                   // 空间侧说说 id，增量合并和失败重试的主键
-	Author       MoodPerson    `json:"author"`                // 发表者
-	Time         int64         `json:"time"`                  // 发表时间 unix 秒
-	TimeText     string        `json:"time_text,omitempty"`   // 展示用日期
-	Content      string        `json:"content"`               // 纯文本，搜索用
-	HTML         string        `json:"html,omitempty"`        // 已转义的展示 HTML
-	Source       string        `json:"source,omitempty"`      // 来源，如手机 QQ
-	Location     string        `json:"location,omitempty"`    // 定位地名
-	ShareTitle   string        `json:"share_title,omitempty"` // 分享卡片标题
-	ShareURL     string        `json:"share_url,omitempty"`   // 分享链接
-	Media        []MoodMedia   `json:"media,omitempty"`       // 正文配图/视频/语音
-	Repost       *MoodRepost   `json:"repost,omitempty"`      // 转发的原说说，原创则为空
-	Likes        []MoodPerson  `json:"likes,omitempty"`       // 列表接口自带的点赞人，通常不完整
-	LikeCount    int           `json:"like_count"`            // 点赞人数，可能比 Likes 列表更全
-	Comments     []MoodComment `json:"comments,omitempty"`    // 评论（含楼中楼）
-	CommentCount int           `json:"comment_count"`         // 空间侧声明的评论数
-	HasMoreCon   bool          `json:"-"`                     // 列表里正文被截断，需要再拉详情
-	PicTotal     int           `json:"-"`                     // 空间侧声明的配图总数，用来判断要不要补拉
+	TID          string        `json:"tid"`                      // 空间侧说说 id，增量合并和失败重试的主键
+	Author       MoodPerson    `json:"author"`                   // 发表者
+	Time         int64         `json:"time"`                     // 发表时间 unix 秒，年份导航和排序用这个
+	TimeText     string        `json:"time_text,omitempty"`      // 发表时间展示文案
+	EditTime     int64         `json:"edit_time,omitempty"`      // 最后编辑 unix 秒；没改过则为 0
+	EditTimeText string        `json:"edit_time_text,omitempty"` // 有过编辑时的展示文案，查看页显示「编辑于」
+	Content      string        `json:"content"`                  // 纯文本，搜索用
+	HTML         string        `json:"html,omitempty"`           // 已转义的展示 HTML
+	Source       string        `json:"source,omitempty"`         // 来源，如手机 QQ
+	Location     string        `json:"location,omitempty"`       // 定位地名
+	ShareTitle   string        `json:"share_title,omitempty"`    // 分享卡片标题
+	ShareURL     string        `json:"share_url,omitempty"`      // 分享链接
+	Media        []MoodMedia   `json:"media,omitempty"`          // 正文配图/视频/语音
+	Repost       *MoodRepost   `json:"repost,omitempty"`         // 转发的原说说，原创则为空
+	Likes        []MoodPerson  `json:"likes,omitempty"`          // 点赞人名单，来自 get_like_list_app 的 like_uin_info
+	LikeCount    int           `json:"like_count"`               // 点赞人数，来自 qz_opcnt2 likedata.cnt 或点赞名单总数
+	VisitCount   int           `json:"visit_count,omitempty"`    // 浏览次数，来自 qz_opcnt2 current.newdata（如 PRD）
+	Comments     []MoodComment `json:"comments,omitempty"`       // 评论（含楼中楼）
+	CommentCount int           `json:"comment_count"`            // 空间侧声明的评论数
+	HasMoreCon   bool          `json:"-"`                        // 列表里正文被截断，需要再拉详情
+	PicTotal     int           `json:"-"`                        // 空间侧声明的配图总数，用来判断要不要补拉
 }
 
 // MoodBackupFile 是 backup.json 的完整结构，程序增量备份时读它。
@@ -149,6 +152,9 @@ func saveMoodBackup(root string, file *MoodBackupFile) error {
 	file.Version = moodBackupVersion
 	file.ExportedAt = time.Now().Format("2006-01-02 15:04:05")
 	file.Total = len(file.Posts)
+	for i := range file.Posts {
+		file.Posts[i] = repairMoodPost(file.Posts[i]) // 旧备份：整段 @、未转图片的表情码
+	}
 	sortMoodPosts(file.Posts)
 
 	path := moodBackupPath(root)

@@ -131,8 +131,12 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
+	p := mpb.NewWithContext(ctx)
+	wait := waitSpinner(p, "正在拉取相册列表")
 	albums, err := s.client.GetAlbumList(ctx, targetUin)
+	stopWaitSpinner(wait)
 	if err != nil {
+		p.Wait()
 		return nil, err
 	}
 
@@ -159,7 +163,6 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	// 调试模式：任务开始打印图例，相册结束打回退明细和汇总，全部结束后再打总汇总。
 	s.resetVideoDebugLogs()
 	s.logVideoDebugHint()
-	p := mpb.NewWithContext(ctx)
 
 	// 相册必须一个下完再下下一个，避免同时打太多相册列表接口触发风控。
 	for i, album := range filteredAlbums {

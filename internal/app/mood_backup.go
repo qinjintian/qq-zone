@@ -16,6 +16,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,6 +139,14 @@ func (b *MoodBackup) Backup(ctx context.Context, targetUin string, exclude bool)
 	atomic.StoreUint64(&b.results.Total, uint64(len(posts)))
 	atomic.StoreUint64(&b.results.NewAdded, uint64(newCount))
 	atomic.StoreUint64(&b.results.Skipped, uint64(skippedPosts))
+
+	// 列表 JSON 没有赞数/浏览数，这里另打 qz_opcnt2 和点赞名单接口补上。
+	if err := b.enrichMoodLikes(ctx, p, targetUin, posts); err != nil && ctx.Err() == nil {
+		b.logger.Warnf("拉取点赞未全部完成: %v", err)
+	}
+
+	// 评论接口只给昵称；查看页要和空间网页一样显示好友备注。
+	b.applyFriendRemarks(ctx, p, posts)
 
 	if err := b.downloadAllMedia(ctx, p, root, targetUin, posts); err != nil && ctx.Err() == nil {
 		b.logger.Warnf("媒体下载过程出现中断: %v", err)
@@ -335,27 +344,35 @@ func findMoodMedia(post *MoodPost, item FailedItem) *MoodMedia {
 // fetchPosts 分页拉说说并按需补详情、补配图。
 // exclude 时连续碰到 3 条本地已有 tid 就停，避免把整本历史再翻一遍。
 func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin string, exclude bool, known map[string]MoodPost) ([]MoodPost, error) {
+	wait := waitSpinner(p, "正在请求说说列表")
 	first, err := b.client.GetMoodList(ctx, targetUin, 0)
+	stopWaitSpinner(wait)
 	if err != nil {
 		return nil, err
 	}
 
-	totalHint := first.Total
-	if totalHint <= 0 {
-		totalHint = len(first.Messages)
+	viewerUin := ""
+	if b.client != nil {
+		viewerUin = b.client.QQ
 	}
-	if totalHint <= 0 {
+	if len(first.Messages) == 0 && first.Total <= 0 {
 		b.logger.Infof("空间 [%s] 没有可见的说说", targetUin)
 		return nil, nil
 	}
 
-	bar := p.AddBar(int64(totalHint),
+	// 进度只按实际保存的可见说说走。msgnum 含仅主人可见的条目，用它当总数会停在 1/2，
+	// 条不结束，mpb.Wait 会一直卡住，后面的配图下载也像死机。
+	bar := p.AddBar(1,
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
 			decor.Name("拉取说说 ", decor.WC{W: 16, C: decor.DindentRight}),
 			decor.CountersNoUnit("%d / %d"),
 		),
-		mpb.AppendDecorators(decor.Percentage()),
+		mpb.AppendDecorators(
+			decor.Percentage(),
+			decor.Name(" "),
+			decor.Elapsed(decor.ET_STYLE_MMSS),
+		),
 	)
 
 	var (
@@ -414,6 +431,9 @@ func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin 
 		stop := false
 		for _, msg := range page.Messages {
 			tid := strings.TrimSpace(msg.Get("tid").String())
+			if moodHiddenFromViewer(msg, viewerUin, targetUin) {
+				continue
+			}
 			if exclude && tid != "" {
 				if _, ok := known[tid]; ok {
 					knownHits++
@@ -429,6 +449,9 @@ func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin 
 			post := parseMoodPost(msg, nil)
 			if needMoodDetail(msg, post) {
 				if detail, dErr := b.client.GetMoodDetail(ctx, targetUin, post.TID); dErr != nil {
+					if shouldSkipInaccessibleMood(dErr, post, viewerUin, targetUin) {
+						continue
+					}
 					b.logger.Debugf("补全说说 %s 失败: %v", post.TID, dErr)
 				} else if detail != nil {
 					post = parseMoodPost(detail.Item, detail.Comments)
@@ -439,12 +462,17 @@ func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin 
 			}
 			if needMoodPics(post) {
 				if urls, pErr := b.client.GetMoodPics(ctx, targetUin, post.TID); pErr != nil {
+					if shouldSkipInaccessibleMood(pErr, post, viewerUin, targetUin) {
+						continue
+					}
 					b.logger.Debugf("补拉说说配图 %s 失败: %v", post.TID, pErr)
 				} else {
 					appendMoodPicURLs(&post, urls)
 				}
 			}
 			posts = append(posts, post)
+			// 总数始终比已保存条数多 1，避免中途 current==total 把条关掉；循环结束再封口。
+			bar.SetTotal(int64(len(posts))+1, false)
 			bar.Increment()
 		}
 
@@ -460,12 +488,188 @@ func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin 
 	}
 
 	if len(posts) == 0 {
-		bar.SetTotal(0, true)
+		bar.Abort(true)
 	} else {
-		bar.SetCurrent(int64(len(posts)))
 		bar.SetTotal(int64(len(posts)), true)
 	}
 	return posts, nil
+}
+
+// enrichMoodLikes 给已解析的说说补点赞数和点赞人。
+// 列表接口 msglist 没有 like 字段，空间网页是另外请求 qz_opcnt2（人数）和 get_like_list_app（名单）。
+func (b *MoodBackup) enrichMoodLikes(ctx context.Context, p *mpb.Progress, targetUin string, posts []MoodPost) error {
+	if b.client == nil || len(posts) == 0 {
+		return nil
+	}
+
+	tids := make([]string, 0, len(posts))
+	indexByTID := make(map[string][]int, len(posts))
+	for i, post := range posts {
+		if post.TID == "" {
+			continue
+		}
+		if _, ok := indexByTID[post.TID]; !ok {
+			tids = append(tids, post.TID)
+		}
+		indexByTID[post.TID] = append(indexByTID[post.TID], i)
+	}
+	if len(tids) == 0 {
+		return nil
+	}
+
+	wait := waitSpinner(p, "正在拉取点赞浏览")
+	counts, err := b.client.GetMoodLikeCounts(ctx, targetUin, tids)
+	stopWaitSpinner(wait)
+	if err != nil {
+		if qzone.IsMoodLoginError(err) {
+			b.logger.Warnf("拉取说说点赞数失败: %v，改为逐条拉点赞名单", err)
+			counts = map[string]qzone.MoodOpCnt{}
+		} else {
+			b.logger.Warnf("拉取说说点赞数失败: %v", err)
+			counts = map[string]qzone.MoodOpCnt{}
+		}
+	}
+
+	needList := 0
+	anyLike := false
+	for tid, n := range counts {
+		for _, i := range indexByTID[tid] {
+			posts[i].LikeCount = n.Like
+			posts[i].VisitCount = n.Visit
+			if n.Like > 0 {
+				anyLike = true
+			}
+			if len(posts[i].Likes) == 0 && len(n.Likers) > 0 {
+				people := make([]MoodPerson, 0, len(n.Likers))
+				for _, x := range n.Likers {
+					people = append(people, MoodPerson{UIN: x.UIN, Name: x.Name})
+				}
+				posts[i].Likes = people
+				if posts[i].LikeCount < len(people) {
+					posts[i].LikeCount = len(people)
+				}
+			}
+		}
+	}
+	for i := range posts {
+		if posts[i].TID == "" {
+			continue
+		}
+		// 计数接口已给出赞数时，只对还没有名单的说说再拉 get_like_list_app。
+		if posts[i].LikeCount > 0 && len(posts[i].Likes) == 0 {
+			needList++
+		}
+	}
+	// 计数接口没对上 tid 时全是 0，空间页其实有赞。这时改走点赞名单接口，用 total_number 当人数。
+	if !anyLike {
+		needList = 0
+		for i := range posts {
+			if posts[i].TID != "" && len(posts[i].Likes) == 0 {
+				needList++
+			}
+		}
+	}
+	if needList == 0 {
+		return nil
+	}
+
+	bar := p.AddBar(int64(needList),
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name("拉取点赞 ", decor.WC{W: 16, C: decor.DindentRight}),
+			decor.CountersNoUnit("%d / %d"),
+		),
+		mpb.AppendDecorators(decor.Percentage()),
+	)
+
+	fetched := 0
+	for i := range posts {
+		select {
+		case <-ctx.Done():
+			bar.Abort(true)
+			return ctx.Err()
+		default:
+		}
+		if posts[i].TID == "" || len(posts[i].Likes) > 0 {
+			continue
+		}
+		// 计数接口有效时，没赞的说说不必再打名单接口。
+		if anyLike && posts[i].LikeCount <= 0 {
+			continue
+		}
+
+		likers, total, lErr := b.client.GetMoodLikeList(ctx, targetUin, posts[i].TID)
+		fetched++
+		bar.Increment()
+		if lErr != nil {
+			// 单条失败不中断整次备份，其它说说的点赞仍继续拉。
+			b.logger.Debugf("拉取说说 %s 点赞名单失败: %v", posts[i].TID, lErr)
+			continue
+		}
+		if total > posts[i].LikeCount {
+			posts[i].LikeCount = total
+		}
+		if len(likers) == 0 {
+			continue
+		}
+		people := make([]MoodPerson, 0, len(likers))
+		for _, x := range likers {
+			people = append(people, MoodPerson{UIN: x.UIN, Name: x.Name})
+		}
+		posts[i].Likes = people
+		if posts[i].LikeCount < len(people) {
+			posts[i].LikeCount = len(people)
+		}
+		if fetched < needList {
+			time.Sleep(80 * time.Millisecond) // 名单接口较脆，条与条之间稍停一下
+		}
+	}
+
+	bar.SetTotal(int64(needList), true)
+	return nil
+}
+
+// applyFriendRemarks 按登录账号的好友备注改评论者、点赞人和回复里的 @。
+// 拉不到通讯录时仍会处理 @{uin:...} 表情码，只是名字继续用接口给的昵称。
+func (b *MoodBackup) applyFriendRemarks(ctx context.Context, p *mpb.Progress, posts []MoodPost) {
+	if b.client == nil || len(posts) == 0 {
+		applyFriendNamesToPosts(posts, nil)
+		return
+	}
+	wait := waitSpinner(p, "正在拉取好友备注")
+	names, err := b.client.GetFriendDisplayNames(ctx)
+	stopWaitSpinner(wait)
+	if err != nil {
+		b.logger.Warnf("拉取好友备注失败，评论仍显示昵称: %v", err)
+		applyFriendNamesToPosts(posts, nil)
+		return
+	}
+	applyFriendNamesToPosts(posts, names)
+}
+
+// shouldSkipInaccessibleMood 详情/配图接口报无权、或空白说说一直等到超时，都按「看不见」跳过。
+func shouldSkipInaccessibleMood(err error, post MoodPost, viewerUin, ownerUin string) bool {
+	if err == nil {
+		return false
+	}
+	if qzone.IsMoodPermissionError(err) {
+		return true
+	}
+	if viewerUin != "" && ownerUin != "" && viewerUin == ownerUin {
+		return false
+	}
+	return isMoodCGITimeout(err) && moodLooksEmpty(post)
+}
+
+func isMoodCGITimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "deadline exceeded") || strings.Contains(msg, "timeout")
 }
 
 // fetchOneRaw 按 tid 拉单条详情，重试失败媒体时用来换新的下载地址。

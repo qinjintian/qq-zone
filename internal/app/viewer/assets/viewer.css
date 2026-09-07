@@ -158,6 +158,11 @@ html[data-theme="dark"] .notice {
   background: #3d2e12;
   color: #f5d090;
 }
+html[data-theme="dark"] .likes {
+  background: #1b2838;
+  color: #8ab4f8;
+}
+html[data-theme="dark"] .like-name { color: #8ab4f8; }
 
 .card {
   background: var(--card);
@@ -199,8 +204,16 @@ html[data-theme="dark"] .notice {
   word-break: break-word;
   white-space: normal;
 }
-.content .mention { color: var(--mention); }
-.content .emote { width: 22px; height: 22px; vertical-align: text-bottom; }
+.content .mention, .c-body .mention { color: var(--mention); }
+.content .emote, .c-body .emote {
+  width: 22px;
+  height: 22px;
+  vertical-align: text-bottom;
+}
+.reply-to {
+  color: var(--muted);
+  margin-right: 2px;
+}
 
 .share-link {
   display: block;
@@ -253,6 +266,30 @@ html[data-theme="dark"] .notice {
   color: var(--muted);
   font-size: 13px;
 }
+
+.likes {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: #eef4ff;
+  border-radius: 6px;
+  color: #576b95;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.likes-mark {
+  flex: none;
+  color: #fff;
+  background: #5b8cff;
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.likes-text { flex: 1; min-width: 0; }
+.like-name { color: #576b95; }
 
 .comments {
   margin-top: 10px;

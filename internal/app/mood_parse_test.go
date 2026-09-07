@@ -26,6 +26,7 @@ func TestParseMoodPost(t *testing.T) {
 		"content": "今天去了海边[em]e100[/em]",
 		"created_time": 1520855040,
 		"createTime": "2018年3月12日",
+		"modifytime": 1520941440,
 		"source_name": "手机QQ",
 		"cmtnum": 2,
 		"pictotal": 1,
@@ -94,6 +95,20 @@ func TestParseMoodPost(t *testing.T) {
 	if len(post.Comments) != 1 || len(post.Comments[0].Replies) != 1 {
 		t.Fatalf("comments = %+v", post.Comments)
 	}
+	if post.EditTime != 1520941440 || post.EditTimeText == "" {
+		t.Fatalf("edit time = %d %s", post.EditTime, post.EditTimeText)
+	}
+}
+
+func TestParseLikeCntField(t *testing.T) {
+	item := gjson.Parse(`{"like":{"cnt":2,"list":[{"fuin":10002,"nick":"张三"},{"fuin":10003,"nick":"王五"}]}}`)
+	if n := parseLikeCount(item); n != 2 {
+		t.Fatalf("like cnt = %d", n)
+	}
+	likes := parseLikers(item)
+	if len(likes) != 2 || likes[0].Name != "张三" || likes[1].Name != "王五" {
+		t.Fatalf("likers = %+v", likes)
+	}
 }
 
 // TestNormalizeMediaURL 校验 https 补全和预览参数改原图。
@@ -115,12 +130,17 @@ func TestWriteMoodViewer(t *testing.T) {
 		UIN:      "10001",
 		Nickname: "小明",
 		Posts: []MoodPost{{
-			TID:      "abc",
-			Time:     1520855040,
-			TimeText: "2018-03-12 21:04",
-			Content:  "hello",
-			HTML:     "hello",
-			Author:   MoodPerson{UIN: "10001", Name: "小明"},
+			TID:       "abc",
+			Time:      1520855040,
+			TimeText:  "2018-03-12 21:04",
+			Content:   "hello",
+			HTML:      "hello",
+			LikeCount: 3,
+			Likes: []MoodPerson{
+				{UIN: "10002", Name: "张三"},
+				{UIN: "10003", Name: "李四"},
+			},
+			Author: MoodPerson{UIN: "10001", Name: "小明"},
 			Media: []MoodMedia{{
 				Type: "image",
 				Path: "media/2018/03/a.jpg",
@@ -146,8 +166,142 @@ func TestWriteMoodViewer(t *testing.T) {
 	if !strings.Contains(string(js), "media/2018/03/a.jpg") {
 		t.Fatal("viewer js missing local media path")
 	}
+	if !strings.Contains(string(js), `"like_count":3`) || !strings.Contains(string(js), "张三") {
+		t.Fatal("viewer js missing like data")
+	}
 	html, _ := os.ReadFile(index)
 	if !strings.Contains(string(html), "posts-2018.js") {
 		t.Fatal("index.html missing year script")
+	}
+}
+
+func TestMoodHiddenFromViewer(t *testing.T) {
+	own := gjson.Parse(`{"tid":"a","secret":1,"content":"私密"}`)
+	if moodHiddenFromViewer(own, "10001", "10001") {
+		t.Fatal("backing up own space should keep private moods")
+	}
+
+	secret := gjson.Parse(`{"tid":"b","secret":1,"content":""}`)
+	if !moodHiddenFromViewer(secret, "10001", "707220871") {
+		t.Fatal("friend secret mood should be skipped")
+	}
+
+	onlySelf := gjson.Parse(`{"tid":"c","ugc_right":64,"content":"x"}`)
+	if !moodHiddenFromViewer(onlySelf, "10001", "707220871") {
+		t.Fatal("ugc_right=64 should be skipped")
+	}
+
+	noTID := gjson.Parse(`{"tid":"","content":""}`)
+	if !moodHiddenFromViewer(noTID, "10001", "707220871") {
+		t.Fatal("empty tid should be skipped")
+	}
+
+	pub := gjson.Parse(`{"tid":"d","secret":0,"content":"公开"}`)
+	if moodHiddenFromViewer(pub, "10001", "707220871") {
+		t.Fatal("public mood should not be skipped")
+	}
+}
+
+func TestParseMoodEditTimeIgnoredWhenUnchanged(t *testing.T) {
+	item := gjson.Parse(`{"created_time":1520855040,"modifytime":1520855040}`)
+	edited, text := parseMoodEditTime(item, 1520855040)
+	if edited != 0 || text != "" {
+		t.Fatalf("unchanged mood should have no edit time, got %d %q", edited, text)
+	}
+}
+
+func TestParseType2PlainTextEmote(t *testing.T) {
+	item := gjson.Parse(`{"tid":"t1","conlist":[{"type":2,"con":"#头顶一块布全球我最富[em]e120[/em]"}]}`)
+	post := parseMoodPost(item, nil)
+	if strings.HasPrefix(post.Content, "@") {
+		t.Fatalf("plain type:2 text should not be @mention: %s", post.Content)
+	}
+	if strings.Contains(post.HTML, "[em]") {
+		t.Fatalf("html still has emote code: %s", post.HTML)
+	}
+	if !strings.Contains(post.HTML, "qzonestyle.gtimg.cn/qzone/em/e120.gif") {
+		t.Fatalf("html missing emote image: %s", post.HTML)
+	}
+	if strings.Contains(post.HTML, "mention") {
+		t.Fatalf("plain text should not be mention: %s", post.HTML)
+	}
+}
+
+func TestRepairFalseMentionEmote(t *testing.T) {
+	p := repairMoodPost(MoodPost{
+		Content: "@#头顶一块布全球我最富[em]e120[/em]",
+		HTML:    `<span class="mention">@#头顶一块布全球我最富[em]e120[/em]</span>`,
+	})
+	if strings.HasPrefix(p.Content, "@") {
+		t.Fatalf("content still prefixed: %s", p.Content)
+	}
+	if strings.Contains(p.HTML, "[em]") || strings.Contains(p.HTML, "mention") {
+		t.Fatalf("repaired html = %s", p.HTML)
+	}
+	if !strings.Contains(p.HTML, "e120.gif") {
+		t.Fatalf("repaired html missing gif: %s", p.HTML)
+	}
+}
+
+func TestWriteMoodViewerRepairsEmote(t *testing.T) {
+	root := t.TempDir()
+	file := &MoodBackupFile{
+		UIN:      "10001",
+		Nickname: "nobody",
+		Posts: []MoodPost{{
+			TID:      "t1",
+			Time:     1767294120,
+			TimeText: "2026-01-02 03:02",
+			Content:  "@#头顶一块布全球我最富[em]e120[/em]",
+			HTML:     `<span class="mention">@#头顶一块布全球我最富[em]e120[/em]</span>`,
+			Author:   MoodPerson{UIN: "10001", Name: "nobody"},
+		}},
+	}
+	if err := writeMoodViewer(root, file); err != nil {
+		t.Fatal(err)
+	}
+	js, err := os.ReadFile(filepath.Join(root, "data", "posts-2026.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(js)
+	if !strings.Contains(body, "e120.gif") {
+		t.Fatal("viewer js missing emote image")
+	}
+	if strings.Contains(body, "mention") {
+		t.Fatal("viewer js still wraps the whole post as mention")
+	}
+}
+
+func TestRewriteReplyAtUinUsesRemark(t *testing.T) {
+	raw := `{"tid":"t1","commentlist":[{
+		"uin":20001,
+		"name":"阿明",
+		"content":"所以去哪跨年？",
+		"create_time":1762836900,
+		"list_3":[{
+			"uin":514092640,
+			"name":"nobody",
+			"content":"@{uin:20001,nick:阿明,who:1,auto:1}阿联酋[em]e10344[/em]",
+			"create_time":1762843227
+		}]
+	}]}`
+	post := parseMoodPost(gjson.Parse(raw), nil)
+	applyFriendNamesToPosts([]MoodPost{post}, map[string]string{"20001": "老王"})
+	if post.Comments[0].Author.Name != "老王" {
+		t.Fatalf("comment name = %s", post.Comments[0].Author.Name)
+	}
+	reply := post.Comments[0].Replies[0]
+	if strings.Contains(reply.HTML, "@{uin:") {
+		t.Fatalf("raw at-uin still in html: %s", reply.HTML)
+	}
+	if !strings.Contains(reply.HTML, "老王") || !strings.Contains(reply.HTML, "回复") {
+		t.Fatalf("reply html = %s", reply.HTML)
+	}
+	if strings.Contains(reply.HTML, "阿明") {
+		t.Fatalf("nickname should be replaced: %s", reply.HTML)
+	}
+	if !strings.Contains(reply.HTML, "e10344.gif") {
+		t.Fatalf("emote missing: %s", reply.HTML)
 	}
 }

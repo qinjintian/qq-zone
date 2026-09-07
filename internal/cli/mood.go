@@ -78,7 +78,7 @@ func (c *CLI) handleMoodBackup(ctx context.Context, targetUin string) {
 		icons.Question.Text = "?"
 		icons.Question.Format = "cyan"
 	})
-	if err := survey.Ask(questions, &answers, opts, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
+	if err := ask(questions, &answers, opts, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
 		return
 	}
 
@@ -158,7 +158,7 @@ func (c *CLI) handleMoodRetry(ctx context.Context, source *app.TaskRecord) {
 	c.printMoodViewerHint(source.TargetUin)
 
 	open := true
-	_ = survey.AskOne(&survey.Confirm{
+	_ = askOne(&survey.Confirm{
 		Message: "是否打开查看页确认结果?",
 		Default: true,
 	}, &open)
@@ -197,7 +197,7 @@ func (c *CLI) handleViewMood() {
 	options = append(options, "↩ 返回上一级")
 
 	var selected string
-	if err := survey.AskOne(&survey.Select{
+	if err := askOne(&survey.Select{
 		Message:  "请选择要打开的说说备份:",
 		Options:  options,
 		PageSize: 10,
@@ -217,7 +217,7 @@ func (c *CLI) printMoodViewerHint(targetUin string) {
 	cyan := color.New(color.FgCyan).SprintFunc()
 	c.logger.Infof("📂 备份目录: %s", cyan(app.MoodRoot(targetUin)))
 	c.logger.Infof("🌐 查看页: %s", cyan(index))
-	c.logger.Info("   可以直接双击 index.html 打开，不需要联网。")
+	c.logger.Infof("👉 可以直接双击 index.html 打开，不需要联网。")
 }
 
 // openMoodViewer 用系统默认浏览器打开本地查看页；失败时提示用户手动双击。
