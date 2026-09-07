@@ -28,7 +28,7 @@ import (
 // 任务记录目录，相对进程工作目录。每个任务一个独立 JSON，便于按 ID 直接定位。
 const taskRecordDir = "storage/tasks"
 
-// TaskMode 区分这次任务是「完整备份」还是「只重试上次失败的文件」。
+// TaskMode 区分这次任务是相册完整备份、失败重试，还是说说备份。
 type TaskMode string
 
 const (
@@ -54,17 +54,17 @@ type TaskConfigSnapshot struct {
 	TaskLimit              int  `json:"task_limit"`                // 并发下载数
 	EnableDynamicTaskLimit bool `json:"enable_dynamic_task_limit"` // 是否按网速自动加减并发
 	EnableTimeline         bool `json:"enable_timeline"`           // 是否按年/月整理目录
-	EnableMetadataExport   bool `json:"enable_metadata_export"`    // 是否额外导出相册 JSON 元数据
+	EnableMetadataExport   bool `json:"enable_metadata_export"`    // 是否额外导出原始 JSON（相册元数据或说说 raw 页）
 	Exclude                bool `json:"exclude"`                   // true 表示增量：本地已有文件则跳过
 }
 
 // TaskSummary 是一次运行结束后的计数摘要，字段含义与 DownloadResult 对齐。
 type TaskSummary struct {
-	Total      uint64 `json:"total"`       // 计划处理的文件数
-	Success    uint64 `json:"success"`     // 成功落盘（含增量跳过）
+	Total      uint64 `json:"total"`       // 计划处理数：相册=媒体文件；说说=说说条数
+	Success    uint64 `json:"success"`     // 成功数（含增量跳过）：相册=文件；说说=说说条数
 	NewAdded   uint64 `json:"new_added"`   // 本次新下载的文件数（不含跳过）
 	Skipped    uint64 `json:"skipped"`     // 因本地已存在而跳过
-	Failed     uint64 `json:"failed"`      // 本次失败数
+	Failed     uint64 `json:"failed"`      // 本次失败数：相册=文件；说说=配图/视频
 	VideoCount uint64 `json:"video_count"` // 成功处理的视频（含实况图视频）
 	ImageCount uint64 `json:"image_count"` // 成功处理的静态图
 	BytesDone  uint64 `json:"bytes_done"`  // 实际写入磁盘的字节数
@@ -84,7 +84,7 @@ type TaskRecord struct {
 	OperatorUin string `json:"operator_uin"`
 	TargetUin   string `json:"target_uin"`
 
-	// 本次勾选的相册名。空切片表示当时选了「全部相册」。
+	// 本次勾选的相册名。空切片表示当时选了「全部相册」。说说备份固定写「说说」。
 	Albums []string `json:"albums,omitempty"`
 
 	Config  TaskConfigSnapshot `json:"config"`

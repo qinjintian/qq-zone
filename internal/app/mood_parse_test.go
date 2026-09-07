@@ -17,6 +17,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// TestParseMoodPost 校验正文、@、表情、原图地址、转发和楼中楼是否按预期收进 MoodPost。
 func TestParseMoodPost(t *testing.T) {
 	raw := `{
 		"tid": "abc123",
@@ -95,6 +96,7 @@ func TestParseMoodPost(t *testing.T) {
 	}
 }
 
+// TestNormalizeMediaURL 校验 https 补全和预览参数改原图。
 func TestNormalizeMediaURL(t *testing.T) {
 	got := normalizeMediaURL("//qpic.cn/a.jpg")
 	if got != "https://qpic.cn/a.jpg" {
@@ -106,6 +108,7 @@ func TestNormalizeMediaURL(t *testing.T) {
 	}
 }
 
+// TestWriteMoodViewer 确认会生成 index.html，且查看页 JS 里不含原始下载地址。
 func TestWriteMoodViewer(t *testing.T) {
 	root := t.TempDir()
 	file := &MoodBackupFile{

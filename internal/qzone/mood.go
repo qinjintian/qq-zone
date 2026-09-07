@@ -24,7 +24,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const moodPageSize = 20
+const moodPageSize = 20 // 网页端说说列表一页条数；pos 必须按这个步长加，不能按返回条数加
 
 // MoodListPage 是 emotion_cgi_msglist_v6 一页的解析结果。
 type MoodListPage struct {
@@ -157,6 +157,7 @@ func (c *Client) GetMoodDetail(ctx context.Context, targetUin, tid string) (*Moo
 	return detail, nil
 }
 
+// getMoodDetailPage 拉取详情接口的一页评论；not_trunc_con=1 尽量拿完整正文。
 func (c *Client) getMoodDetailPage(ctx context.Context, targetUin, tid string, pos, num int) (gjson.Result, []gjson.Result, error) {
 	params := url.Values{}
 	params.Set("uin", targetUin)
@@ -246,6 +247,7 @@ func (c *Client) GetMoodPics(ctx context.Context, targetUin, tid string) ([]stri
 	return urls, nil
 }
 
+// moodHeaders 说说接口使用的 Cookie / Referer，Referer 指到空间说说页。
 func (c *Client) moodHeaders(targetUin string) map[string]string {
 	return map[string]string{
 		"cookie":     c.Cookie,
@@ -255,6 +257,7 @@ func (c *Client) moodHeaders(targetUin string) map[string]string {
 	}
 }
 
+// moodAPIError 把空间返回码转成中文错误；登录失效和无权限单独提示。
 func moodAPIError(code int64, res gjson.Result) error {
 	msg := strings.TrimSpace(firstNonEmpty(res.Get("message").String(), res.Get("msg").String(), res.Get("subcode").String()))
 	switch code {

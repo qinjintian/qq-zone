@@ -27,16 +27,19 @@ import (
 	"github.com/qinjintian/qq-zone/internal/app/viewer"
 )
 
+// moodViewerMeta 写入 data/meta.js，查看页页头和年份导航用它，不读 backup.json（file:// 下 fetch 会跨域）。
 type moodViewerMeta struct {
-	UIN        string   `json:"uin"`
-	Nickname   string   `json:"nickname"`
-	ExportedAt string   `json:"exported_at"`
-	Total      int      `json:"total"`
-	Years      []string `json:"years"`
-	Archived   bool     `json:"archived,omitempty"`
-	Notice     string   `json:"notice,omitempty"`
+	UIN        string   `json:"uin"`                // 被备份空间的 QQ，页头展示
+	Nickname   string   `json:"nickname"`           // 昵称，页标题和页头用
+	ExportedAt string   `json:"exported_at"`        // 本次生成查看页的时间
+	Total      int      `json:"total"`              // 说说条数
+	Years      []string `json:"years"`              // 有说说的年份，导航栏按这个渲染（新→旧）
+	Archived   bool     `json:"archived,omitempty"` // 更早说说被封存时为 true
+	Notice     string   `json:"notice,omitempty"`   // 页顶提示文案，例如更早说说被封存
 }
 
+// writeMoodViewer 写出 index.html、样式脚本，以及按年拆开的 posts-YYYY.js。
+// 年份脚本用 <script src> 引入，双击 file:// 打开时不会踩到 fetch 跨域。
 func writeMoodViewer(root string, file *MoodBackupFile) error {
 	if file == nil {
 		return fmt.Errorf("empty mood backup")
@@ -124,6 +127,7 @@ func writeMoodViewer(root string, file *MoodBackupFile) error {
 	return os.WriteFile(filepath.Join(root, moodIndexFile), index, 0644)
 }
 
+// copyViewerAsset 把内嵌的 CSS/JS 模板拷到备份目录的 assets/ 下。
 func copyViewerAsset(src, dest string) error {
 	data, err := viewer.Files.ReadFile(src)
 	if err != nil {
@@ -132,6 +136,7 @@ func copyViewerAsset(src, dest string) error {
 	return os.WriteFile(dest, data, 0644)
 }
 
+// stripMoodURLs 生成查看页数据前去掉原始下载地址和 vid，避免把接口链接写进可分享的 HTML。
 func stripMoodURLs(posts []MoodPost) []MoodPost {
 	raw, err := json.Marshal(posts)
 	if err != nil {
