@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QQ 空间说说备份</title>
+  <link rel="stylesheet" href="assets/viewer.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">Q</div>
+      <div class="brand-text">
+        <h1 id="title">QQ 空间说说</h1>
+        <p id="subtitle">本地备份 · 可离线查看</p>
+      </div>
+    </div>
+    <div class="toolbar">
+      <label class="search-wrap">
+        <span class="sr-only">搜索</span>
+        <input id="search" type="search" placeholder="搜索说说、评论、地点…" autocomplete="off">
+      </label>
+      <select id="filter" aria-label="筛选">
+        <option value="all">全部</option>
+        <option value="photo">有图</option>
+        <option value="video">有视频</option>
+      </select>
+      <button type="button" id="theme" title="切换深色模式" aria-label="切换深色模式">◐</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="years" id="years" aria-label="按年份浏览"></aside>
+    <main class="feed" id="feed">
+      <p class="empty">正在载入备份…</p>
+    </main>
+  </div>
+
+  <div class="lightbox" id="lightbox" hidden>
+    <button type="button" class="lb-close" id="lb-close" aria-label="关闭">×</button>
+    <button type="button" class="lb-nav prev" id="lb-prev" aria-label="上一张">‹</button>
+    <img id="lb-img" alt="">
+    <button type="button" class="lb-nav next" id="lb-next" aria-label="下一张">›</button>
+  </div>
+
+  <script src="data/meta.js"></script>
+  <!--YEAR_SCRIPTS-->
+  <script src="assets/viewer.js"></script>
+</body>
+</html>
