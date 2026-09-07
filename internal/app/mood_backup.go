@@ -36,14 +36,14 @@ import (
 
 // MoodBackup 负责把指定空间的说说拉到本地并生成查看页。
 type MoodBackup struct {
-	client  *qzone.Client
-	config  *Config
-	logger  *zap.SugaredLogger
-	results DownloadResult
+	client  *qzone.Client      // 已登录的空间客户端
+	config  *Config            // 并发、是否落盘 raw JSON 等
+	logger  *zap.SugaredLogger // 任务日志
+	results DownloadResult     // 复用相册的统计结构：Total/Success 记说说条数，Failed 记配图失败
 
-	archived  bool
-	notice    string
-	spaceName string
+	archived  bool   // 列表接口提示更早说说被封存时为 true
+	notice    string // 封存提示文案，写入 backup.json 给查看页顶部展示
+	spaceName string // 被备份空间的昵称，查看页标题用
 }
 
 // NewMoodBackup 创建说说备份任务。
@@ -286,6 +286,7 @@ func (b *MoodBackup) RetryFailed(ctx context.Context, targetUin string, items []
 	return &b.results, nil
 }
 
+// findMoodMedia 按失败项上的 id / 相对路径 / 原 URL，在帖子树里找回对应媒体。
 func findMoodMedia(post *MoodPost, item FailedItem) *MoodMedia {
 	if post == nil {
 		return nil
@@ -331,6 +332,8 @@ func findMoodMedia(post *MoodPost, item FailedItem) *MoodMedia {
 	return walk(post.Comments)
 }
 
+// fetchPosts 分页拉说说并按需补详情、补配图。
+// exclude 时连续碰到 3 条本地已有 tid 就停，避免把整本历史再翻一遍。
 func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin string, exclude bool, known map[string]MoodPost) ([]MoodPost, error) {
 	first, err := b.client.GetMoodList(ctx, targetUin, 0)
 	if err != nil {
@@ -465,10 +468,12 @@ func (b *MoodBackup) fetchPosts(ctx context.Context, p *mpb.Progress, targetUin 
 	return posts, nil
 }
 
+// fetchOneRaw 按 tid 拉单条详情，重试失败媒体时用来换新的下载地址。
 func (b *MoodBackup) fetchOneRaw(ctx context.Context, targetUin, tid string) (*qzone.MoodDetail, error) {
 	return b.client.GetMoodDetail(ctx, targetUin, tid)
 }
 
+// downloadAllMedia 并发下载说说里的配图/视频/语音；已有非空文件会跳过。
 func (b *MoodBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root, targetUin string, posts []MoodPost) error {
 	ptrs := collectMediaPtrs(posts)
 	if len(ptrs) == 0 {
@@ -516,6 +521,7 @@ func (b *MoodBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root
 	return nil
 }
 
+// downloadOneMedia 下载单份媒体并回写相对路径；失败记进 FailedItems 且清空 Path，查看页就不会链到半截文件。
 func (b *MoodBackup) downloadOneMedia(ctx context.Context, root, targetUin string, posts []MoodPost, idx int, m *MoodMedia) {
 	if m == nil {
 		return
@@ -569,6 +575,7 @@ func (b *MoodBackup) downloadOneMedia(ctx context.Context, root, targetUin strin
 	b.noteMediaSuccess(m.Type == "video")
 }
 
+// mediaOwnerTID 用指针比对找出这份媒体属于哪条说说，失败重试时要靠 tid 重新拉详情。
 func mediaOwnerTID(posts []MoodPost, _ int, target *MoodMedia) string {
 	for i := range posts {
 		p := &posts[i]
@@ -605,6 +612,7 @@ func mediaOwnerTID(posts []MoodPost, _ int, target *MoodMedia) string {
 	return ""
 }
 
+// mediaOwnerTime 取出媒体所属说说的发表时间，用来按年/月建目录、回写文件时间。
 func mediaOwnerTime(posts []MoodPost, _ int, target *MoodMedia) int64 {
 	for i := range posts {
 		p := &posts[i]
@@ -641,6 +649,7 @@ func mediaOwnerTime(posts []MoodPost, _ int, target *MoodMedia) int64 {
 	return 0
 }
 
+// moodMediaRelPath 生成 media/年/月/前缀_日期_哈希.ext 相对路径，避免中文原名和重名冲突。
 func moodMediaRelPath(m *MoodMedia, tid string, ts int64, idx int) string {
 	t := time.Unix(ts, 0).In(shanghaiLoc)
 	if ts <= 0 {
@@ -664,6 +673,7 @@ func moodMediaRelPath(m *MoodMedia, tid string, ts int64, idx int) string {
 	return filepath.ToSlash(filepath.Join("media", t.Format("2006"), t.Format("01"), name))
 }
 
+// downloadCandidates 按候选 URL 依次下载；视频还可以拿 vid 走腾讯 getinfo 换源。
 func (b *MoodBackup) downloadCandidates(ctx context.Context, targetUin string, urls []string, videoID, dest, name string, isVideo bool) (map[string]interface{}, error) {
 	var lastErr error
 	tried := map[string]bool{}
@@ -704,6 +714,7 @@ func (b *MoodBackup) downloadCandidates(ctx context.Context, targetUin string, u
 	return nil, lastErr
 }
 
+// downloadOneURL 下载单条地址；视频遇到 403/404 会去掉 Cookie 再试一次，更接近浏览器播放请求。
 func (b *MoodBackup) downloadOneURL(ctx context.Context, targetUin, rawURL, dest, name string, isVideo bool) (map[string]interface{}, error) {
 	headers := map[string]string{
 		"cookie":     b.client.Cookie,
@@ -749,6 +760,7 @@ func (b *MoodBackup) downloadOneURL(ctx context.Context, targetUin, rawURL, dest
 	return res, err
 }
 
+// downloadAvatars 把出现过的 QQ 头像下到 avatars/<uin>.jpg；失败不记任务失败，查看页会改用首字母。
 func (b *MoodBackup) downloadAvatars(ctx context.Context, p *mpb.Progress, root string, posts []MoodPost) map[string]string {
 	people := collectPeople(posts)
 	dir := filepath.Join(root, "avatars")
@@ -813,6 +825,7 @@ func (b *MoodBackup) downloadAvatars(ctx context.Context, p *mpb.Progress, root 
 	return out
 }
 
+// trackWrittenBytes 把本次写出的字节累加进 BytesDone，和相册任务摘要字段对齐。
 func (b *MoodBackup) trackWrittenBytes(delta int64) {
 	if delta <= 0 {
 		return
@@ -820,6 +833,7 @@ func (b *MoodBackup) trackWrittenBytes(delta int64) {
 	atomic.AddUint64(&b.results.BytesDone, uint64(delta))
 }
 
+// noteMediaSuccess 只累加图片/视频成功数；说说条数由 Backup 结束时单独写入 Success。
 func (b *MoodBackup) noteMediaSuccess(isVideo bool) {
 	if isVideo {
 		atomic.AddUint64(&b.results.VideoCount, 1)
@@ -833,7 +847,7 @@ func MoodRoot(targetUin string) string {
 	return moodRoot(targetUin)
 }
 
-// MoodIndexPath 返回查看页路径。
+// MoodIndexPath 返回查看页路径，备份结束或菜单「查看说说备份」时打开它。
 func MoodIndexPath(targetUin string) string {
 	return moodIndexPath(moodRoot(targetUin))
 }

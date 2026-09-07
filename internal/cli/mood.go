@@ -27,14 +27,15 @@ import (
 	"github.com/qinjintian/qq-zone/internal/pkg/util"
 )
 
+// handleMoodBackup 询问增量等选项后备份指定空间的说说，并按需打开本地查看页。
 func (c *CLI) handleMoodBackup(ctx context.Context, targetUin string) {
 	c.logger.Infof("🚀 正在为 [%s] 配置说说备份...", color.YellowString(targetUin))
 
 	var answers struct {
-		TaskLimit            string
-		Exclude              bool
-		EnableMetadataExport bool
-		OpenViewer           bool
+		TaskLimit            string // auto 或 1-50
+		Exclude              bool   // true=增量，碰到已有 tid 就停
+		EnableMetadataExport bool   // 是否把接口原始 JSON 存到 raw/
+		OpenViewer           bool   // 备份结束后是否打开 index.html
 	}
 
 	questions := []*survey.Question{
@@ -122,6 +123,7 @@ func (c *CLI) handleMoodBackup(ctx context.Context, targetUin string) {
 	}
 }
 
+// handleMoodRetry 只重试源任务里还没成功的说说配图，成功后刷新查看页。
 func (c *CLI) handleMoodRetry(ctx context.Context, source *app.TaskRecord) {
 	taskCfg := c.config.Clone()
 	taskCfg.TaskLimit = source.Config.TaskLimit
@@ -165,6 +167,7 @@ func (c *CLI) handleMoodRetry(ctx context.Context, source *app.TaskRecord) {
 	}
 }
 
+// handleViewMood 列出本地已有的说说查看页并用系统浏览器打开；不要求当前已登录。
 func (c *CLI) handleViewMood() {
 	viewers := app.ListMoodViewers()
 	if len(viewers) == 0 {
@@ -208,6 +211,7 @@ func (c *CLI) handleViewMood() {
 	c.openMoodViewer(indexMap[selected])
 }
 
+// printMoodViewerHint 在任务报告后面打印备份目录和 index.html 路径。
 func (c *CLI) printMoodViewerHint(targetUin string) {
 	index := app.MoodIndexPath(targetUin)
 	cyan := color.New(color.FgCyan).SprintFunc()
@@ -216,6 +220,7 @@ func (c *CLI) printMoodViewerHint(targetUin string) {
 	c.logger.Info("   可以直接双击 index.html 打开，不需要联网。")
 }
 
+// openMoodViewer 用系统默认浏览器打开本地查看页；失败时提示用户手动双击。
 func (c *CLI) openMoodViewer(indexPath string) {
 	if !util.Exists(indexPath) {
 		c.logger.Warnf("⚠️ 找不到查看页: %s", indexPath)

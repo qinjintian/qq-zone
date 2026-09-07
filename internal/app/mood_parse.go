@@ -26,8 +26,10 @@ import (
 )
 
 var (
+	// emotePattern 匹配空间正文里的 [em]e100[/em] 表情码。
 	emotePattern = regexp.MustCompile(`\[em\]e(\d+)\[/em\]`)
-	shanghaiLoc  = func() *time.Location {
+	// shanghaiLoc 用于按国内时区切年/月目录和查看页年份导航。
+	shanghaiLoc = func() *time.Location {
 		loc, err := time.LoadLocation("Asia/Shanghai")
 		if err != nil {
 			return time.Local
@@ -36,6 +38,8 @@ var (
 	}()
 )
 
+// parseMoodPost 把列表或详情接口的一条 JSON 收成 MoodPost。
+// extraComments 非空时优先用它（详情接口翻页拼好的评论），否则读 item.commentlist。
 func parseMoodPost(item gjson.Result, extraComments []gjson.Result) MoodPost {
 	created := item.Get("created_time").Int()
 	post := MoodPost{
@@ -81,6 +85,7 @@ func parseMoodPost(item gjson.Result, extraComments []gjson.Result) MoodPost {
 	return post
 }
 
+// parseMoodComments 解析一层评论列表；空内容且无配图、无回复的条目会丢掉。
 func parseMoodComments(list []gjson.Result) []MoodComment {
 	if len(list) == 0 {
 		return nil
@@ -96,6 +101,7 @@ func parseMoodComments(list []gjson.Result) []MoodComment {
 	return out
 }
 
+// parseMoodComment 解析单条评论，楼中楼走 list_3（没有再试 list_2）。
 func parseMoodComment(raw gjson.Result) MoodComment {
 	created := raw.Get("create_time").Int()
 	plain, rich := renderMoodContent(raw)
@@ -122,6 +128,7 @@ func parseMoodComment(raw gjson.Result) MoodComment {
 	return c
 }
 
+// parseCommentMedia 收集评论配图，兼容 pic 数组和 rich_info 两种字段。
 func parseCommentMedia(raw gjson.Result) []MoodMedia {
 	var out []MoodMedia
 	raw.Get("pic").ForEach(func(_, pic gjson.Result) bool {
@@ -152,6 +159,7 @@ func parseCommentMedia(raw gjson.Result) []MoodMedia {
 	return out
 }
 
+// parseMoodMedia 从说说正文收集图片、视频和语音；同一张图按 id/url 去重。
 func parseMoodMedia(item gjson.Result) []MoodMedia {
 	var out []MoodMedia
 	seen := map[string]bool{}
@@ -235,6 +243,7 @@ func parseMoodMedia(item gjson.Result) []MoodMedia {
 	return out
 }
 
+// parseMoodRepost 解析转发的原说说；原帖被删时仍保留一段提示文案。
 func parseMoodRepost(item gjson.Result) *MoodRepost {
 	tid := strings.TrimSpace(item.Get("rt_tid").String())
 	content := strings.TrimSpace(item.Get("rt_con.content").String())
@@ -264,6 +273,7 @@ func parseMoodRepost(item gjson.Result) *MoodRepost {
 	return rt
 }
 
+// appendMoodPicURLs 把 get_pics 补回来的地址追加进帖子，跳过已经有的 URL。
 func appendMoodPicURLs(post *MoodPost, urls []string) {
 	if post == nil {
 		return
@@ -290,6 +300,7 @@ func appendMoodPicURLs(post *MoodPost, urls []string) {
 	}
 }
 
+// needMoodDetail 判断列表数据是否不够用：正文被截断，或评论数多于已返回的列表。
 func needMoodDetail(item gjson.Result, post MoodPost) bool {
 	if post.HasMoreCon {
 		return true
@@ -304,6 +315,7 @@ func needMoodDetail(item gjson.Result, post MoodPost) bool {
 	return false
 }
 
+// needMoodPics 判断配图是否被列表截断，需要再打 get_pics。
 func needMoodPics(post MoodPost) bool {
 	if post.PicTotal <= 0 {
 		return false
@@ -317,6 +329,7 @@ func needMoodPics(post MoodPost) bool {
 	return images < post.PicTotal
 }
 
+// pickPicURL 按清晰度从高到低挑图片地址：原图 → url3 → 缩略图。
 func pickPicURL(pic gjson.Result) string {
 	for _, key := range []string{"origin_url", "raw", "o_url", "url3", "url2", "url1", "url", "custom_url"} {
 		if u := normalizeMediaURL(pic.Get(key).String()); u != "" {
@@ -326,6 +339,7 @@ func pickPicURL(pic gjson.Result) string {
 	return ""
 }
 
+// pickVideoURL 从 video / video_info 里挑可下载的播放地址。
 func pickVideoURL(video gjson.Result) string {
 	if !video.Exists() || video.Type == gjson.Null {
 		return ""
@@ -338,6 +352,7 @@ func pickVideoURL(video gjson.Result) string {
 	return pickPicURL(video)
 }
 
+// normalizeMediaURL 把协议补成 https，解开 cgi_imgproxy，并尽量把预览参数改成原图。
 func normalizeMediaURL(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" || s == "null" || s == "undefined" {
@@ -364,6 +379,7 @@ func normalizeMediaURL(s string) string {
 	return s
 }
 
+// compactURLs 去掉空值和重复地址，保留换源顺序。
 func compactURLs(urls ...string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -378,6 +394,7 @@ func compactURLs(urls ...string) []string {
 	return out
 }
 
+// parseLikeCount 兼容 like 既可能是对象 {count} 也可能是数字。
 func parseLikeCount(item gjson.Result) int {
 	if v := item.Get("like.count"); v.Exists() && v.Type != gjson.Null {
 		return int(v.Int())
@@ -391,6 +408,7 @@ func parseLikeCount(item gjson.Result) int {
 	return int(item.Get("rt_like").Int())
 }
 
+// parseLikers 从列表接口自带的点赞人里取名字；完整点赞名单不另打接口，避免限流。
 func parseLikers(item gjson.Result) []MoodPerson {
 	var out []MoodPerson
 	seen := map[string]bool{}
@@ -417,6 +435,7 @@ func parseLikers(item gjson.Result) []MoodPerson {
 	return out
 }
 
+// moodLocation 取出 lbs 里可读的地点名。
 func moodLocation(lbs gjson.Result) string {
 	if !lbs.Exists() || lbs.Type == gjson.Null {
 		return ""
@@ -424,6 +443,7 @@ func moodLocation(lbs gjson.Result) string {
 	return strings.TrimSpace(firstMoodString(lbs, "name", "idname", "sname"))
 }
 
+// renderMoodContent 优先按 conlist 还原 @好友 和正文；没有 conlist 就用 content。
 func renderMoodContent(item gjson.Result) (plain, rich string) {
 	conlist := item.Get("conlist")
 	if conlist.Exists() && conlist.Type != gjson.Null && len(conlist.Array()) > 0 {
@@ -458,6 +478,7 @@ func renderMoodContent(item gjson.Result) (plain, rich string) {
 	return strings.TrimSpace(text), moodTextToHTML(text)
 }
 
+// moodTextToHTML 转义用户正文，换行变成 <br>，空间表情码变成 img。
 func moodTextToHTML(text string) string {
 	if text == "" {
 		return ""
@@ -469,6 +490,7 @@ func moodTextToHTML(text string) string {
 	return escaped
 }
 
+// formatMoodTime 用东八区格式化 unix 时间；没有时间戳时退回接口给的中文日期。
 func formatMoodTime(ts int64, fallback string) string {
 	if ts > 0 {
 		return time.Unix(ts, 0).In(shanghaiLoc).Format("2006-01-02 15:04")
@@ -476,6 +498,7 @@ func formatMoodTime(ts int64, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
+// firstMoodString 按候选字段名取第一个非空字符串，用来兼容接口字段别名。
 func firstMoodString(v gjson.Result, keys ...string) string {
 	for _, key := range keys {
 		s := strings.TrimSpace(v.Get(key).String())
@@ -486,6 +509,7 @@ func firstMoodString(v gjson.Result, keys ...string) string {
 	return ""
 }
 
+// collectMediaPtrs 收集说说、转发和评论里所有媒体的指针，下载时原地回写 Path。
 func collectMediaPtrs(posts []MoodPost) []*MoodMedia {
 	var out []*MoodMedia
 	var walkComments func(*[]MoodComment)
@@ -513,6 +537,7 @@ func collectMediaPtrs(posts []MoodPost) []*MoodMedia {
 	return out
 }
 
+// collectPeople 按 QQ 号去重，收集需要下头像的作者、评论者和点赞者。
 func collectPeople(posts []MoodPost) []MoodPerson {
 	seen := map[string]MoodPerson{}
 	add := func(p MoodPerson) {
@@ -551,6 +576,7 @@ func collectPeople(posts []MoodPost) []MoodPerson {
 	return out
 }
 
+// applyAvatars 把头像相对路径写回所有出现过该 QQ 号的人。
 func applyAvatars(posts []MoodPost, avatars map[string]string) {
 	set := func(p *MoodPerson) {
 		if p == nil || p.UIN == "" {
@@ -581,6 +607,7 @@ func applyAvatars(posts []MoodPost, avatars map[string]string) {
 	}
 }
 
+// keepExistingMedia 全量刷新文案时，把本地已经下好的文件路径拷回新解析的帖子，避免重复下载。
 func keepExistingMedia(dst, src MoodPost) MoodPost {
 	byID := map[string]MoodMedia{}
 	index := func(list []MoodMedia) {
@@ -617,6 +644,7 @@ func keepExistingMedia(dst, src MoodPost) MoodPost {
 	return dst
 }
 
+// matchMedia 用 pic_id 或原始 URL 把新旧两条媒体对上。
 func matchMedia(byID map[string]MoodMedia, m MoodMedia) (MoodMedia, bool) {
 	if m.ID != "" {
 		if old, ok := byID[m.ID]; ok {

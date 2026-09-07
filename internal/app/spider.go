@@ -62,11 +62,11 @@ type FailedItem struct {
 
 // DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
 type DownloadResult struct {
-	Total       uint64       // 任务规划要下载的媒体文件总数
-	Success     uint64       // 成功下载落盘的文件数（包含全新下载和增量跳过）
+	Total       uint64       // 计划处理数：相册=媒体文件；说说=说说条数
+	Success     uint64       // 成功数（含增量跳过）：相册=文件；说说=说说条数
 	NewAdded    uint64       // 本次任务中全新下载的文件数（不含跳过）
 	Skipped     uint64       // 触发增量策略被跳过的已存在文件数
-	Failed      uint64       // 发生异常导致下载失败的文件数
+	Failed      uint64       // 失败数：相册=文件；说说=配图/视频失败
 	VideoCount  uint64       // 成功处理的视频文件（含实况图视频）数量
 	ImageCount  uint64       // 成功处理的静态图片数量
 	BytesDone   uint64       // 实时记录已成功写盘的网络字节数，用于动态并发调优
