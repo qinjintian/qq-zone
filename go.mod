@@ -14,6 +14,8 @@ require (
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.21.0
+	golang.org/x/sys v0.44.0
+	golang.org/x/term v0.34.0
 	golang.org/x/time v0.15.0
 )
 
@@ -33,8 +35,6 @@ require (
 	go.uber.org/dig v1.19.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/term v0.34.0 // indirect
 	golang.org/x/text v0.28.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )

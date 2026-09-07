@@ -27,8 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	iurl "net/url"
 	nhttp "net/http"
+	iurl "net/url"
 
 	"github.com/fatih/color"
 	ihttp "github.com/qinjintian/qq-zone/internal/net/http"
@@ -41,9 +41,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// FailedKindShuoShuo 标记这条失败记录来自说说备份，重试时走说说链路而不是相册链路。
+const FailedKindShuoShuo = "shuoshuo"
+
 // FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
-	Album     string `json:"album"`                // 相册名称，失败清单和重试菜单展示用
+	Album     string `json:"album"`                // 相册名称，失败清单和重试菜单展示用；说说固定为「说说」
 	Name      string `json:"name"`                 // 本地保存文件名（失败时也可能是 sloc）
 	Error     string `json:"error"`                // 失败原因
 	TargetUin string `json:"target_uin,omitempty"` // 被备份的 QQ 号
@@ -51,15 +54,19 @@ type FailedItem struct {
 	AlbumRaw  string `json:"album_raw,omitempty"`  // 当时的相册 JSON，重试时还原字段
 	PhotoRaw  string `json:"photo_raw,omitempty"`  // 当时的照片 JSON，重试时重新解析 URL
 	IsVideo   bool   `json:"is_video,omitempty"`   // 是否视频（含按视频链路保存的实况图）
+	Kind      string `json:"kind,omitempty"`       // 空=相册；shuoshuo=说说
+	MoodTID   string `json:"mood_tid,omitempty"`   // 说说 tid，重试时重新拉详情换新地址
+	MediaURL  string `json:"media_url,omitempty"`  // 上次失败时用过的下载地址，详情失败时作兜底
+	MediaID   string `json:"media_id,omitempty"`   // 配图/视频在该条说说里的稳定 id
 }
 
 // DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
 type DownloadResult struct {
-	Total       uint64       // 任务规划要下载的媒体文件总数
-	Success     uint64       // 成功下载落盘的文件数（包含全新下载和增量跳过）
+	Total       uint64       // 计划处理数：相册=媒体文件；说说=说说条数
+	Success     uint64       // 成功数（含增量跳过）：相册=文件；说说=说说条数
 	NewAdded    uint64       // 本次任务中全新下载的文件数（不含跳过）
 	Skipped     uint64       // 触发增量策略被跳过的已存在文件数
-	Failed      uint64       // 发生异常导致下载失败的文件数
+	Failed      uint64       // 失败数：相册=文件；说说=配图/视频失败
 	VideoCount  uint64       // 成功处理的视频文件（含实况图视频）数量
 	ImageCount  uint64       // 成功处理的静态图片数量
 	BytesDone   uint64       // 实时记录已成功写盘的网络字节数，用于动态并发调优
@@ -124,8 +131,12 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
+	p := mpb.NewWithContext(ctx)
+	wait := waitSpinner(p, "正在拉取相册列表")
 	albums, err := s.client.GetAlbumList(ctx, targetUin)
+	stopWaitSpinner(wait)
 	if err != nil {
+		p.Wait()
 		return nil, err
 	}
 
@@ -152,7 +163,6 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	// 调试模式：任务开始打印图例，相册结束打回退明细和汇总，全部结束后再打总汇总。
 	s.resetVideoDebugLogs()
 	s.logVideoDebugHint()
-	p := mpb.NewWithContext(ctx)
 
 	// 相册必须一个下完再下下一个，避免同时打太多相册列表接口触发风控。
 	for i, album := range filteredAlbums {
