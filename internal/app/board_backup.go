@@ -146,6 +146,11 @@ func (b *BoardBackup) Backup(ctx context.Context, targetUin string, exclude bool
 	atomic.StoreUint64(&b.results.NewAdded, uint64(newCount))
 	atomic.StoreUint64(&b.results.Skipped, uint64(skippedPosts))
 
+	// 旧备份可能把气泡 ID 当成配图、表情还是相对路径；下载前先修一遍。
+	for i := range posts {
+		posts[i] = repairBoardPost(posts[i])
+	}
+
 	// 完全无权时不要再打好友备注和配图接口，免得雪上加霜。
 	if !blocked {
 		// 接口只给昵称；查看页要和空间网页一样显示好友备注。
@@ -508,7 +513,7 @@ func (b *BoardBackup) downloadOneMedia(ctx context.Context, root, targetUin stri
 		return
 	}
 	urls := compactURLs(append([]string{m.URL}, m.URLs...)...)
-	if len(urls) == 0 {
+	if len(urls) == 0 || !looksLikeRemoteMediaURL(urls[0]) {
 		return
 	}
 

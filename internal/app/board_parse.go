@@ -29,12 +29,14 @@ import (
 const boardSecretPlaceholder = "这是一条私密留言，当前账号看不到内容。"
 
 var (
-	boardImgSrcPattern = regexp.MustCompile(`(?i)<img[^>]+src=["']([^"']+)["']`)                                                              // 抽出 HTML <img> 的 src
-	boardImgTagPattern = regexp.MustCompile(`(?i)<img\b[^>]*>`)                                                                               // 整段 <img> 标签，用来从正文里摘掉配图
-	boardImgBBPattern  = regexp.MustCompile(`(?i)\[img\](https?://[^\s\[\]]+)\[/img\]`)                                                       // UBB [img]url[/img]
-	boardBrPattern     = regexp.MustCompile(`(?i)<br\s*/?>`)                                                                                  // 换行标签收成纯文本 \n
-	boardTagPattern    = regexp.MustCompile(`(?i)<[^>]+>`)                                                                                    // 其余 HTML 标签
-	boardDatePattern   = regexp.MustCompile(`(\d{4})\s*[年/\-.]\s*(\d{1,2})\s*[月/\-.]\s*(\d{1,2})[日号]?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?`) // 中文日期，如 2012年5月1日 12:00
+	boardImgSrcPattern       = regexp.MustCompile(`(?i)<img[^>]+src=["']([^"']+)["']`)                                                              // 抽出 HTML <img> 的 src
+	boardImgTagPattern       = regexp.MustCompile(`(?i)<img\b[^>]*>`)                                                                               // 整段 <img> 标签，用来从正文里摘掉配图
+	boardImgBBPattern        = regexp.MustCompile(`(?i)\[img\](https?://[^\s\[\]]+)\[/img\]`)                                                       // UBB [img]url[/img]
+	boardBrPattern           = regexp.MustCompile(`(?i)<br\s*/?>`)                                                                                  // 换行标签收成纯文本 \n
+	boardTagPattern          = regexp.MustCompile(`(?i)<[^>]+>`)                                                                                    // 其余 HTML 标签
+	boardDatePattern         = regexp.MustCompile(`(\d{4})\s*[年/\-.]\s*(\d{1,2})\s*[月/\-.]\s*(\d{1,2})[日号]?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?`) // 中文日期，如 2012年5月1日 12:00
+	boardRelEmoteSrcPattern  = regexp.MustCompile(`(?i)(<img\b[^>]*\bsrc=["']?)/qzone/em/(e\d+\.gif)`)                                              // htmlContent 里的相对表情路径
+	boardOfficialEmoteImgTag = regexp.MustCompile(`(?i)<img\b[^>]*src=["']https://qzonestyle\.gtimg\.cn/qzone/em/e\d+\.gif["'][^>]*>`)              // 已指向官方 CDN 的表情图
 )
 
 // parseBoardMessage 把 get_msgb 的一条 commentList 收成 MoodPost。
@@ -68,8 +70,8 @@ func parseBoardMessage(item gjson.Result) MoodPost {
 	plain, rich := renderBoardContent(item)
 	post.Content = plain
 	post.Media = parseBoardMedia(item, rich)
-	// 配图改走 media 网格本地文件，正文里的远程 <img> 去掉，避免离线时裂图还叠一张。
-	post.HTML = stripBoardRemoteImages(rich)
+	// 配图改走 media 网格本地文件，正文里的远程 <img> 去掉；表情改成官方 CDN，离线打开也能显示（需联网）。
+	post.HTML = rewriteBoardEmoteSrc(stripBoardRemoteImages(rich))
 
 	replies := item.Get("replyList")
 	if !replies.Exists() || replies.Type == gjson.Null {
@@ -156,7 +158,7 @@ func parseBoardReplies(list []gjson.Result) []MoodComment {
 		c := MoodComment{
 			ID:       strings.TrimSpace(firstMoodString(raw, "id", "replyid", "tid")),
 			Content:  plain,
-			HTML:     stripBoardRemoteImages(rich),
+			HTML:     rewriteBoardEmoteSrc(stripBoardRemoteImages(rich)),
 			Time:     created,
 			TimeText: formatMoodTime(created, firstMoodString(raw, "pubtime", "time", "createTime")),
 			Author: MoodPerson{
@@ -178,13 +180,16 @@ func parseBoardMedia(item gjson.Result, htmlBody string) []MoodMedia {
 	var urls []string
 	push := func(raw string) {
 		u := normalizeMediaURL(raw)
-		if u == "" || isBoardEmoteURL(u) {
+		// bmp 常是气泡样式 ID（如 18d195a001008101），不是下载地址；表情走正文 CDN。
+		if u == "" || isBoardEmoteURL(u) || !looksLikeRemoteMediaURL(u) {
 			return
 		}
 		urls = append(urls, u)
 	}
 
-	push(firstMoodString(item, "bmp", "pic", "picUrl", "picurl"))
+	// bmp 只有真的是 http(s) 图才收；不要和 pic 拼在一起优先取 bmp。
+	push(firstMoodString(item, "bmp"))
+	push(firstMoodString(item, "picUrl", "picurl"))
 	item.Get("pic").ForEach(func(_, v gjson.Result) bool {
 		if v.Type == gjson.String {
 			push(v.String())
@@ -230,11 +235,67 @@ func parseBoardMedia(item gjson.Result, htmlBody string) []MoodMedia {
 	return out
 }
 
-// isBoardEmoteURL 判断是不是空间小黄脸 gif。这类图走 CDN，不进 media/。
+// isBoardEmoteURL 判断是不是空间自带表情。这类图走官方 CDN，不进 media/。
 func isBoardEmoteURL(u string) bool {
 	lu := strings.ToLower(u)
 	return strings.Contains(lu, "qzonestyle.gtimg.cn/qzone/em/") ||
-		strings.Contains(lu, "/qzone/em/e")
+		strings.Contains(lu, "/qzone/em/")
+}
+
+// looksLikeRemoteMediaURL 只有带协议的地址才去下载；相对路径和气泡 ID 都会被丢掉。
+func looksLikeRemoteMediaURL(u string) bool {
+	lu := strings.ToLower(strings.TrimSpace(u))
+	return strings.HasPrefix(lu, "https://") || strings.HasPrefix(lu, "http://")
+}
+
+// rewriteBoardEmoteSrc 把 htmlContent 里的 /qzone/em/e182.gif 收成官方 CDN，并标成小表情。
+func rewriteBoardEmoteSrc(s string) string {
+	if s == "" {
+		return s
+	}
+	s = boardRelEmoteSrcPattern.ReplaceAllString(s, `${1}https://qzonestyle.gtimg.cn/qzone/em/${2}`)
+	return boardOfficialEmoteImgTag.ReplaceAllStringFunc(s, func(tag string) string {
+		if strings.Contains(strings.ToLower(tag), "emote") {
+			return tag
+		}
+		return strings.Replace(tag, "<img", `<img class="emote"`, 1)
+	})
+}
+
+// dropNonRemoteBoardMedia 丢掉气泡 ID 这类伪地址，已下好的本地文件保留。
+func dropNonRemoteBoardMedia(list []MoodMedia) []MoodMedia {
+	if len(list) == 0 {
+		return list
+	}
+	out := list[:0]
+	for _, m := range list {
+		if strings.TrimSpace(m.Path) != "" || looksLikeRemoteMediaURL(m.URL) {
+			out = append(out, m)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// repairBoardPost 生成查看页或再次备份前，修正表情相对路径并清掉误收的 bmp。
+func repairBoardPost(p MoodPost) MoodPost {
+	p = repairMoodPost(p)
+	p.HTML = rewriteBoardEmoteSrc(p.HTML)
+	p.Media = dropNonRemoteBoardMedia(p.Media)
+	p.Comments = repairBoardComments(p.Comments)
+	return p
+}
+
+// repairBoardComments 递归修正回复里的表情路径和误收的配图。
+func repairBoardComments(cs []MoodComment) []MoodComment {
+	for i := range cs {
+		cs[i].HTML = rewriteBoardEmoteSrc(cs[i].HTML)
+		cs[i].Media = dropNonRemoteBoardMedia(cs[i].Media)
+		cs[i].Replies = repairBoardComments(cs[i].Replies)
+	}
+	return cs
 }
 
 // stripBoardRemoteImages 去掉正文里待下载的配图标签，空间表情 gif 留下。

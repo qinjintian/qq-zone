@@ -57,8 +57,11 @@
   }
 
   function emoteHtml(s) {
-    return String(s == null ? "" : s).replace(/\[em\]e(\d+)\[\/em\]/gi,
+    s = String(s == null ? "" : s).replace(/\[em\]e(\d+)\[\/em\]/gi,
       '<img class="emote" src="https://qzonestyle.gtimg.cn/qzone/em/e$1.gif" alt="">');
+    // 留言板 htmlContent 里的表情是相对路径 /qzone/em/e182.gif，file:// 打不开，改走官方 CDN。
+    return s.replace(/(<img\b[^>]*\bsrc=["']?)\/qzone\/em\/(e\d+\.gif)/gi,
+      "$1https://qzonestyle.gtimg.cn/qzone/em/$2");
   }
 
   function atUinHtml(s) {

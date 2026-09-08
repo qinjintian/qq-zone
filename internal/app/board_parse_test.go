@@ -86,6 +86,44 @@ func TestParseBoardMessageImageAndReply(t *testing.T) {
 	}
 }
 
+func TestParseBoardMessageEmoteNotMedia(t *testing.T) {
+	raw := `{
+		"id": "1000050011",
+		"uin": 531517643,
+		"nickname": "访客",
+		"bmp": "18d195a001008101",
+		"htmlContent": "就像今天。<img src=\"/qzone/em/e182.gif\"  /><wbr  />",
+		"ubbContent": "就像今天。[em]e182[/em]",
+		"pubtime": "2026-09-08 13:00:23"
+	}`
+	post := parseBoardMessage(gjson.Parse(raw))
+	if len(post.Media) != 0 {
+		t.Fatalf("bmp/emote should not be media: %+v", post.Media)
+	}
+	if !strings.Contains(post.HTML, "https://qzonestyle.gtimg.cn/qzone/em/e182.gif") {
+		t.Fatalf("emote should use official CDN: %s", post.HTML)
+	}
+	if strings.Contains(post.HTML, `src="/qzone/em/`) {
+		t.Fatalf("relative emote path should be rewritten: %s", post.HTML)
+	}
+	if !strings.Contains(post.HTML, `class="emote"`) {
+		t.Fatalf("emote img missing class: %s", post.HTML)
+	}
+}
+
+func TestRepairBoardPostDropsBmpID(t *testing.T) {
+	post := repairBoardPost(MoodPost{
+		HTML:  `今天<img src="/qzone/em/e144.gif"  />`,
+		Media: []MoodMedia{{Type: "image", URL: "18d195a001008101"}},
+	})
+	if len(post.Media) != 0 {
+		t.Fatalf("hex bmp id should be dropped: %+v", post.Media)
+	}
+	if !strings.Contains(post.HTML, "qzonestyle.gtimg.cn/qzone/em/e144.gif") {
+		t.Fatalf("html = %s", post.HTML)
+	}
+}
+
 func TestParseBoardTimeText(t *testing.T) {
 	n := parseBoardTimeText("2012年5月1日 12:00")
 	if n <= 1e9 {
@@ -113,7 +151,7 @@ func TestWriteBoardViewer(t *testing.T) {
 			Time:     1520855040,
 			TimeText: "2018-03-12 21:04",
 			Content:  "你好",
-			HTML:     "你好",
+			HTML:     `你好<img src="/qzone/em/e182.gif" />`,
 			Secret:   true,
 			Author:   MoodPerson{UIN: "20001", Name: "好友"},
 			Media: []MoodMedia{{
@@ -140,6 +178,9 @@ func TestWriteBoardViewer(t *testing.T) {
 	}
 	if !strings.Contains(string(js), `"secret":true`) {
 		t.Fatal("viewer js missing secret flag")
+	}
+	if !strings.Contains(string(js), "qzonestyle.gtimg.cn/qzone/em/e182.gif") {
+		t.Fatal("viewer js should rewrite relative emote to official CDN")
 	}
 	meta, err := os.ReadFile(filepath.Join(root, "data", "meta.js"))
 	if err != nil {

@@ -52,7 +52,7 @@ func writeBoardViewer(root string, file *BoardBackupFile) error {
 
 	posts := stripMoodURLs(file.Posts)
 	for i := range posts {
-		posts[i] = repairMoodPost(posts[i])
+		posts[i] = repairBoardPost(posts[i])
 	}
 	byYear := map[string][]MoodPost{}
 	for _, post := range posts {
