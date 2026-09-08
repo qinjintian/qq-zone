@@ -1,14 +1,12 @@
 <div align="center">
-
-# QQ 空间备份（相册原图 / 原视频 / 说说时间线）
-
-**扫码登录，一键备份到本地。** 相册下原图和原视频；说说连同评论、点赞、浏览数一起保存，并生成可双击打开的网页。
-
-[![Release](https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square)](https://github.com/qinjintian/qq-zone/releases)
-[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square)](https://github.com/qinjintian/qq-zone/releases/latest)
-
+  <h1>QQ 空间备份（相册原图 / 原视频 / 说说时间线）</h1>
+  <p><strong>扫码登录，一键备份到本地。</strong> 相册下原图和原视频；说说连同评论、点赞、浏览数一起保存，并生成可双击打开的网页。</p>
+  <p>
+    <a href="https://github.com/qinjintian/qq-zone/releases"><img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="Release"></a>
+    <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go" alt="Go"></a>
+    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License"></a>
+    <a href="https://github.com/qinjintian/qq-zone/releases/latest"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"></a>
+  </p>
 </div>
 
 <p align="center">
