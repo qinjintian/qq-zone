@@ -224,6 +224,12 @@ html[data-theme="dark"] .like-name { color: #8ab4f8; }
 }
 .meta { min-width: 0; flex: 1; }
 .name { font-weight: 700; font-size: 15px; }
+.floor {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 8px;
+}
 .when {
   margin-top: 3px;
   color: var(--muted);
@@ -278,6 +284,25 @@ html[data-theme="dark"] .like-name { color: #8ab4f8; }
 }
 .grid.n1 img, .grid.n1 video { height: auto; max-height: 420px; cursor: zoom-in; }
 .grid video { cursor: pointer; background: #000; }
+/* 卡片里用 cover 裁成方格；点控件全屏后必须 contain，否则竖屏视频会被裁掉。两条规则不能写在一起，旧 WebKit 会整段丢掉。 */
+.grid video:fullscreen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+  background: #000;
+}
+.grid video:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  border-radius: 0;
+  background: #000;
+}
 
 .repost {
   margin-top: 12px;
@@ -329,6 +354,17 @@ html[data-theme="dark"] .like-name { color: #8ab4f8; }
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
+}
+html[data-kind="board"] .comments {
+  margin-top: 12px;
+  padding: 8px 12px 4px;
+  border-top: 0;
+  background: var(--page);
+  border-radius: 8px;
+}
+html[data-kind="board"] .comment .c-time {
+  display: block;
+  margin: 2px 0 0;
 }
 .comment {
   display: flex;

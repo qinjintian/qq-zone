@@ -65,8 +65,11 @@
   }
 
   function atUinHtml(s) {
-    return String(s == null ? "" : s).replace(/@\{uin:(\d+),nick:(.*?),who:\d+,auto:\d+\}/g, function (_, uin, nick) {
-      return '<span class="reply-to">回复</span> <span class="mention">' + escapeHtml(nick) + "</span>";
+    return String(s == null ? "" : s).replace(/@\{uin:(\d+),nick:([^}]+)\}/g, function (_, uin, nick) {
+      nick = String(nick || "").replace(/,who:\d+/g, "").replace(/,auto:\d+/g, "");
+      var auto = /auto:1/.test(String(_));
+      var tag = '<span class="mention">' + escapeHtml(nick) + "</span>";
+      return auto ? '<span class="reply-to">回复</span> ' + tag : "@" + tag;
     });
   }
 
@@ -191,10 +194,11 @@
     var comments = p.comments || [];
     var commentBlock = "";
     if (comments.length) {
-      var shown = comments.slice(0, 2).map(commentHtml).join("");
-      var rest = comments.length > 2 ? comments.slice(2).map(commentHtml).join("") : "";
-      commentBlock = '<div class="comments">' + shown +
-        (rest ? '<div class="more" hidden>' + rest + '</div><button type="button" class="toggle" data-more>查看全部 ' + comments.length + copy.more + "</button>" : "") +
+      // 留言板回复条数通常不多，全部展开，和空间网页一致；说说仍默认先显示 2 条。
+      var shown = isBoard ? comments : comments.slice(0, 2);
+      var rest = (!isBoard && comments.length > 2) ? comments.slice(2) : [];
+      commentBlock = '<div class="comments">' + shown.map(commentHtml).join("") +
+        (rest.length ? '<div class="more" hidden>' + rest.map(commentHtml).join("") + '</div><button type="button" class="toggle" data-more>查看全部 ' + comments.length + copy.more + "</button>" : "") +
         "</div>";
     }
     var likeBlock = "";
@@ -212,7 +216,7 @@
     var statsParts = [];
     if (p.visit_count) statsParts.push("浏览" + p.visit_count + "次");
     if (likeCount) statsParts.push("赞(" + likeCount + ")");
-    if (p.comment_count) statsParts.push(p.comment_count + copy.stats);
+    if (!isBoard && p.comment_count) statsParts.push(p.comment_count + copy.stats);
     var stats = statsParts.length
       ? '<div class="stats">' + statsParts.map(function (s) { return "<span>" + escapeHtml(s) + "</span>"; }).join("") + "</div>"
       : "";
@@ -233,9 +237,10 @@
         mediaGrid(p.repost.media, pid + "-rt") + "</div>";
     }
     var badge = p.secret ? '<span class="badge-secret">私密</span>' : "";
+    var floor = (isBoard && p.floor) ? '<span class="floor">第' + p.floor + "楼</span>" : "";
     return '<article class="card" data-id="' + escapeHtml(p.tid || pid) + '">' +
       '<div class="card-head">' + avatarHtml(p.author, "avatar") +
-      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + badge + "</div>" +
+      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + badge + floor + "</div>" +
       '<div class="when">' + when + loc + src + "</div></div></div>" +
       '<div class="content">' + richText(p.html, p.content) + "</div>" +
       share + mediaGrid(p.media, pid) + repost + stats + likeBlock +
@@ -262,6 +267,7 @@
   }
 
   function fillHeader() {
+    if (isBoard) document.documentElement.setAttribute("data-kind", "board");
     var name = meta.nickname || (isBoard ? "QQ 空间留言" : "QQ 空间说说");
     document.getElementById("title").textContent = name + copy.title;
     document.title = name + copy.title + "备份";

@@ -54,7 +54,7 @@ func NewBoardBackup(client *qzone.Client, config *Config, logger *zap.SugaredLog
 }
 
 // Backup 拉取 targetUin 的留言、下载配图并生成 index.html。
-// exclude=true 时从最新往回拉，连续碰到已备份的留言 id 就停。
+// exclude=true 时从最新往回拉；已有留言仍会收下以刷新回复，整页都是本地已有 id 才停。
 func (b *BoardBackup) Backup(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	b.results = DownloadResult{}
 	root := boardRoot(targetUin)
@@ -153,8 +153,10 @@ func (b *BoardBackup) Backup(ctx context.Context, targetUin string, exclude bool
 
 	// 完全无权时不要再打好友备注和配图接口，免得雪上加霜。
 	if !blocked {
-		// 接口只给昵称；查看页要和空间网页一样显示好友备注。
-		b.applyFriendRemarks(ctx, p, posts)
+		// 接口只给昵称；查看页要和空间网页一样显示好友备注（含留言板主人）。
+		if remark := b.applyFriendRemarks(ctx, p, targetUin, posts); remark != "" {
+			nickname = remark
+		}
 
 		if err := b.downloadAllMedia(ctx, p, root, targetUin, posts); err != nil && ctx.Err() == nil {
 			b.logger.Warnf("配图下载过程出现中断: %v", err)
@@ -296,8 +298,8 @@ func (b *BoardBackup) RetryFailed(ctx context.Context, targetUin string, items [
 	return &b.results, nil
 }
 
-// fetchMessages 分页拉留言。增量模式下连续碰到 3 条本地已有 id 就停，
-// 避免把整本历史再翻一遍；start 必须按 20 递增，接口不会按实际返回条数对齐。
+// fetchMessages 分页拉留言。增量时本页 id 本地都有就停（本页仍会收下，用来覆盖新回复）；
+// start 必须按 20 递增，接口不会按实际返回条数对齐。
 func (b *BoardBackup) fetchMessages(ctx context.Context, p *mpb.Progress, targetUin string, exclude bool, known map[string]MoodPost) ([]MoodPost, error) {
 	wait := waitSpinner(p, "正在请求留言板")
 	first, err := b.client.GetMsgBoard(ctx, targetUin, 0)
@@ -308,6 +310,7 @@ func (b *BoardBackup) fetchMessages(ctx context.Context, p *mpb.Progress, target
 		}
 		return nil, err
 	}
+	b.spaceUin = targetUin
 
 	if len(first.Items) == 0 && first.Total <= 0 {
 		b.logger.Infof("空间 [%s] 没有可见的留言", targetUin)
@@ -333,7 +336,6 @@ func (b *BoardBackup) fetchMessages(ctx context.Context, p *mpb.Progress, target
 		posts     []MoodPost
 		start     = 0
 		emptyHits = 0
-		knownHits = 0
 		page      = first
 		pageIdx   = 0
 	)
@@ -372,31 +374,29 @@ func (b *BoardBackup) fetchMessages(ctx context.Context, p *mpb.Progress, target
 		}
 		emptyHits = 0
 
-		stop := false
-		for _, item := range page.Items {
-			msg := parseBoardMessage(item)
+		pageAllKnown := exclude && len(page.Items) > 0
+		for i, item := range page.Items {
+			floor := 0
+			if page.Total > 0 {
+				floor = page.Total - start - i
+			}
+			msg := parseBoardMessage(item, floor)
 			if msg.TID == "" {
 				continue
 			}
 			if exclude {
-				if _, ok := known[msg.TID]; ok {
-					knownHits++
-					if knownHits >= 3 {
-						stop = true
-						break
-					}
-					continue
+				if _, ok := known[msg.TID]; !ok {
+					pageAllKnown = false
 				}
-				knownHits = 0 // 中间又出现新留言，说明还没接到本地已有区间
 			}
+			// 已有留言也收下，这样对方后来补的回复能覆盖进 backup.json / index.html。
 			posts = append(posts, msg)
-			// 总数始终比已保存条数多 1，避免中途 current==total 把条关掉。
 			bar.SetTotal(int64(len(posts))+1, false)
 			bar.Increment()
 		}
 
-		if stop {
-			b.logger.Infof("增量模式：已遇到本地已有留言，停止继续往前翻页")
+		if pageAllKnown {
+			b.logger.Infof("增量模式：本页留言本地都有，已用接口结果覆盖回复后停止往前翻页")
 			break
 		}
 
@@ -435,14 +435,15 @@ func (b *BoardBackup) captureIntro(page *qzone.MsgBoardPage) {
 	b.intro = parseBoardIntro(page.Nickname, uin, page.Sign)
 }
 
-// applyFriendRemarks 用登录账号的好友备注覆盖留言者/回复者昵称，和空间网页一致。
-func (b *BoardBackup) applyFriendRemarks(ctx context.Context, p *mpb.Progress, posts []MoodPost) {
+// applyFriendRemarks 用登录账号的好友备注覆盖留言者/回复者/主人寄语的昵称，和空间网页一致。
+// 返回值是空间主人的展示名（有备注用备注），给查看页标题用。
+func (b *BoardBackup) applyFriendRemarks(ctx context.Context, p *mpb.Progress, targetUin string, posts []MoodPost) string {
 	if b.client == nil {
 		applyFriendNamesToPosts(posts, nil)
-		return
+		return ""
 	}
-	if len(posts) == 0 && (b.intro == nil || b.intro.Author.UIN == "") {
-		return
+	if len(posts) == 0 && (b.intro == nil || b.intro.Author.UIN == "") && targetUin == "" {
+		return ""
 	}
 	wait := waitSpinner(p, "正在拉取好友备注")
 	names, err := b.client.GetFriendDisplayNames(ctx)
@@ -450,14 +451,18 @@ func (b *BoardBackup) applyFriendRemarks(ctx context.Context, p *mpb.Progress, p
 	if err != nil {
 		b.logger.Warnf("拉取好友备注失败，留言仍显示昵称: %v", err)
 		applyFriendNamesToPosts(posts, nil)
-		return
+		return ""
 	}
 	applyFriendNamesToPosts(posts, names)
-	if b.intro != nil && b.intro.Author.UIN != "" {
+	if b.intro != nil {
+		if b.intro.Author.UIN == "" {
+			b.intro.Author.UIN = targetUin
+		}
 		if n := strings.TrimSpace(names[b.intro.Author.UIN]); n != "" {
 			b.intro.Author.Name = n
 		}
 	}
+	return strings.TrimSpace(names[targetUin])
 }
 
 // downloadAllMedia 并发下载留言和回复里的配图；本地已有非空文件会跳过。
