@@ -27,7 +27,7 @@ func TestParseBoardMessageSecret(t *testing.T) {
 		"secret": 1,
 		"pubtime": "2012-05-01 12:00"
 	}`
-	post := parseBoardMessage(gjson.Parse(raw))
+	post := parseBoardMessage(gjson.Parse(raw), 0)
 	if !post.Secret {
 		t.Fatal("want secret")
 	}
@@ -65,7 +65,7 @@ func TestParseBoardMessageImageAndReply(t *testing.T) {
 			}
 		]
 	}`
-	post := parseBoardMessage(gjson.Parse(raw))
+	post := parseBoardMessage(gjson.Parse(raw), 11)
 	if post.TID != "11" || post.Author.Name != "小明" {
 		t.Fatalf("post = %+v", post)
 	}
@@ -80,6 +80,9 @@ func TestParseBoardMessageImageAndReply(t *testing.T) {
 	}
 	if len(post.Media) != 1 || !strings.Contains(post.Media[0].URL, "b.example/pic.jpg") {
 		t.Fatalf("media = %+v", post.Media)
+	}
+	if post.Floor != 11 {
+		t.Fatalf("floor = %d", post.Floor)
 	}
 	if len(post.Comments) != 1 || post.Comments[0].Content != "收到" {
 		t.Fatalf("comments = %+v", post.Comments)
@@ -96,7 +99,10 @@ func TestParseBoardMessageEmoteNotMedia(t *testing.T) {
 		"ubbContent": "就像今天。[em]e182[/em]",
 		"pubtime": "2026-09-08 13:00:23"
 	}`
-	post := parseBoardMessage(gjson.Parse(raw))
+	post := parseBoardMessage(gjson.Parse(raw), 0)
+	if post.Floor != 11 {
+		t.Fatalf("floor from id = %d", post.Floor)
+	}
 	if len(post.Media) != 0 {
 		t.Fatalf("bmp/emote should not be media: %+v", post.Media)
 	}
@@ -148,12 +154,20 @@ func TestWriteBoardViewer(t *testing.T) {
 		},
 		Posts: []MoodPost{{
 			TID:      "11",
+			Floor:    11,
 			Time:     1520855040,
 			TimeText: "2018-03-12 21:04",
 			Content:  "你好",
 			HTML:     `你好<img src="/qzone/em/e182.gif" />`,
 			Secret:   true,
 			Author:   MoodPerson{UIN: "20001", Name: "好友"},
+			Comments: []MoodComment{{
+				ID:       "r1",
+				Content:  "收到",
+				HTML:     "收到",
+				TimeText: "2018-03-12 22:00",
+				Author:   MoodPerson{UIN: "10001", Name: "小明"},
+			}},
 			Media: []MoodMedia{{
 				Type: "image",
 				Path: "media/2018/03/a.jpg",
@@ -181,6 +195,12 @@ func TestWriteBoardViewer(t *testing.T) {
 	}
 	if !strings.Contains(string(js), "qzonestyle.gtimg.cn/qzone/em/e182.gif") {
 		t.Fatal("viewer js should rewrite relative emote to official CDN")
+	}
+	if !strings.Contains(string(js), `"floor":11`) {
+		t.Fatal("viewer js missing floor")
+	}
+	if !strings.Contains(string(js), "收到") {
+		t.Fatal("viewer js missing reply")
 	}
 	meta, err := os.ReadFile(filepath.Join(root, "data", "meta.js"))
 	if err != nil {
@@ -216,5 +236,126 @@ func TestIsBoardTask(t *testing.T) {
 	}
 	if IsBoardTask(&TaskRecord{Mode: TaskModeShuoShuo}) {
 		t.Fatal("shuoshuo should not match")
+	}
+}
+
+func TestParseBoardMessageAPIReplyAndFloorFallback(t *testing.T) {
+	raw := `{
+		"id": "1000050011",
+		"uin": 10002,
+		"nickname": "张三",
+		"htmlContent": "今天天气不错",
+		"pubtime": "2026-09-08 13:00:23",
+		"replyList": [{
+			"content": "@{uin:10002,nick:张三} 收到了",
+			"uin": 10001,
+			"time": 1788871055,
+			"nick": "李四"
+		}]
+	}`
+	post := parseBoardMessage(gjson.Parse(raw), 11)
+	if post.Floor != 11 {
+		t.Fatalf("floor = %d", post.Floor)
+	}
+	if len(post.Comments) != 1 {
+		t.Fatalf("comments = %+v", post.Comments)
+	}
+	c := post.Comments[0]
+	if c.Author.UIN != "10001" || c.Author.Name != "李四" {
+		t.Fatalf("reply author = %+v", c.Author)
+	}
+	if !strings.Contains(c.Content, "收到了") {
+		t.Fatalf("reply content = %q", c.Content)
+	}
+	if strings.Contains(c.HTML, "@{uin:") {
+		t.Fatalf("raw at-uin still in html: %s", c.HTML)
+	}
+	if c.Time != 1788871055 {
+		t.Fatalf("reply time = %d", c.Time)
+	}
+	if want := formatMoodTime(1788871055, ""); c.TimeText != want {
+		t.Fatalf("reply time_text = %q want %q", c.TimeText, want)
+	}
+
+	posts := []MoodPost{post}
+	applyFriendNamesToPosts(posts, map[string]string{
+		"10001": "王五",
+		"10002": "老张",
+	})
+	if posts[0].Author.Name != "老张" {
+		t.Fatalf("board owner remark = %q", posts[0].Author.Name)
+	}
+	if posts[0].Comments[0].Author.Name != "王五" {
+		t.Fatalf("reply remark = %q", posts[0].Comments[0].Author.Name)
+	}
+	if !strings.Contains(posts[0].Comments[0].HTML, "老张") {
+		t.Fatalf("at-mention should use remark: %s", posts[0].Comments[0].HTML)
+	}
+}
+
+func TestParseBoardFloorPrefersExplicitThenFallback(t *testing.T) {
+	item := gjson.Parse(`{"id":"1000050003","floor":7}`)
+	if n := parseBoardFloor(item, "1000050003", 11); n != 7 {
+		t.Fatalf("explicit floor = %d", n)
+	}
+	item = gjson.Parse(`{"id":"abc"}`)
+	if n := parseBoardFloor(item, "abc", 4); n != 4 {
+		t.Fatalf("fallback floor = %d", n)
+	}
+}
+
+func TestMergeMoodPostsKeepsNewerReplies(t *testing.T) {
+	older := []MoodPost{{
+		TID:     "11",
+		Time:    100,
+		Content: "旧正文",
+		Media:   []MoodMedia{{ID: "pic1", Type: "image", Path: "media/a.jpg", URL: "https://example/a.jpg"}},
+	}}
+	newer := []MoodPost{{
+		TID:     "11",
+		Time:    100,
+		Floor:   11,
+		Content: "旧正文",
+		Media:   []MoodMedia{{ID: "pic1", Type: "image", URL: "https://example/a.jpg"}},
+		Comments: []MoodComment{{
+			ID:      "10001-1788871055",
+			Content: "新回复",
+			Author:  MoodPerson{UIN: "10001", Name: "王五"},
+		}},
+	}}
+	merged := mergeMoodPosts(newer, older)
+	if len(merged) != 1 {
+		t.Fatalf("len = %d", len(merged))
+	}
+	got := keepBoardMedia(merged[0], older[0])
+	if got.Floor != 11 {
+		t.Fatalf("floor = %d", got.Floor)
+	}
+	if len(got.Comments) != 1 || got.Comments[0].Content != "新回复" {
+		t.Fatalf("comments = %+v", got.Comments)
+	}
+	if got.Media[0].Path != "media/a.jpg" {
+		t.Fatalf("local media path lost: %+v", got.Media)
+	}
+}
+
+func TestBoardViewerAssetsShowFloorAndReplies(t *testing.T) {
+	js, err := os.ReadFile(filepath.Join("viewer", "assets", "viewer.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(js)
+	if !strings.Contains(body, "第") || !strings.Contains(body, "p.floor") {
+		t.Fatal("viewer.js should render 第N楼")
+	}
+	if !strings.Contains(body, "isBoard ? comments") {
+		t.Fatal("viewer.js should expand all board replies")
+	}
+	css, err := os.ReadFile(filepath.Join("viewer", "assets", "viewer.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(css), ".floor") {
+		t.Fatal("viewer.css missing .floor")
 	}
 }

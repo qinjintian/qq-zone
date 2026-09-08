@@ -173,6 +173,17 @@ func TestWriteMoodViewer(t *testing.T) {
 	if !strings.Contains(string(html), "posts-2018.js") {
 		t.Fatal("index.html missing year script")
 	}
+	css, err := os.ReadFile(filepath.Join(root, "assets", "viewer.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(css)
+	if !strings.Contains(body, "video:fullscreen") || !strings.Contains(body, "video:-webkit-full-screen") {
+		t.Fatal("viewer css missing fullscreen video rules")
+	}
+	if !strings.Contains(body, "object-fit: contain") {
+		t.Fatal("fullscreen video should keep aspect ratio")
+	}
 }
 
 func TestMoodHiddenFromViewer(t *testing.T) {

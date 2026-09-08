@@ -33,7 +33,7 @@ func (c *CLI) handleBoardBackup(ctx context.Context, targetUin string) {
 
 	var answers struct {
 		TaskLimit            string // auto 或 1-50
-		Exclude              bool   // true=增量，碰到已有留言 id 就停
+		Exclude              bool   // true=增量：已有留言刷新回复，整页都熟才停翻页
 		EnableMetadataExport bool   // 是否把接口原始 JSON 存到 raw/
 		OpenViewer           bool   // 备份结束后是否打开 index.html
 	}
@@ -54,7 +54,7 @@ func (c *CLI) handleBoardBackup(ctx context.Context, targetUin string) {
 		{
 			Name: "Exclude",
 			Prompt: &survey.Confirm{
-				Message: "📦 开启增量备份 (跳过已有留言和已下载的配图)?",
+				Message: "📦 开启增量备份 (已有留言会刷新回复，已下载的配图会跳过)?",
 				Default: true,
 			},
 		},

@@ -41,12 +41,14 @@ var (
 
 // parseBoardMessage 把 get_msgb 的一条 commentList 收成 MoodPost。
 // tid 用留言 id；回复放进 comments；私密留言只保留占位文案，不暴露正文。
-func parseBoardMessage(item gjson.Result) MoodPost {
+// floor 是本页推算的楼层（总数 - 偏移）；接口没给楼层字段时用它。
+func parseBoardMessage(item gjson.Result, floor int) MoodPost {
 	id := strings.TrimSpace(firstMoodString(item, "id", "msgid", "commentid"))
 	secret := item.Get("secret").Int() != 0 || item.Get("isscret").Int() != 0 || item.Get("isSecret").Bool()
 	created := parseBoardTime(item)
 	post := MoodPost{
 		TID:      id,
+		Floor:    parseBoardFloor(item, id, floor),
 		Time:     created,
 		TimeText: formatMoodTime(created, firstMoodString(item, "pubtime", "pubTime", "time")),
 		Secret:   secret,
@@ -77,14 +79,41 @@ func parseBoardMessage(item gjson.Result) MoodPost {
 	if !replies.Exists() || replies.Type == gjson.Null {
 		replies = item.Get("replylist")
 	}
+	if !replies.Exists() || replies.Type == gjson.Null {
+		replies = item.Get("replys")
+	}
 	if replies.Exists() && replies.Type != gjson.Null {
 		post.Comments = parseBoardReplies(replies.Array())
 	}
 	post.CommentCount = int(item.Get("replyCount").Int())
+	if n := item.Get("replyNum").Int(); int(n) > post.CommentCount {
+		post.CommentCount = int(n)
+	}
 	if post.CommentCount < len(post.Comments) {
 		post.CommentCount = len(post.Comments)
 	}
 	return post
+}
+
+// parseBoardFloor 取出空间页上的「第 N 楼」。
+// 接口偶尔给 floor/index；没有时用调用方按 total-偏移推的值；再没有才从 id 末尾数字猜。
+func parseBoardFloor(item gjson.Result, id string, fallback int) int {
+	for _, key := range []string{"floor", "index", "pos"} {
+		if n := int(item.Get(key).Int()); n > 0 {
+			return n
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	if r := int(n % 10000); r > 0 {
+		return r
+	}
+	return 0
 }
 
 // parseBoardIntro 取出主人寄语；没有寄语时返回 nil，查看页就不渲染置顶卡片。
@@ -143,13 +172,17 @@ func stripBoardTags(s string) string {
 }
 
 // parseBoardReplies 解析一条留言下的回复列表。
+// 空间 get_msgb 的回复通常只有 content / nick / time，没有 ubbContent 和 id。
 func parseBoardReplies(list []gjson.Result) []MoodComment {
 	if len(list) == 0 {
 		return nil
 	}
 	out := make([]MoodComment, 0, len(list))
 	for _, raw := range list {
-		created := parseBoardTime(raw)
+		created := moodUnixTime(raw, "time", "timestamp", "create_time", "createTime")
+		if created == 0 {
+			created = parseBoardTime(raw)
+		}
 		plain, rich := renderBoardContent(raw)
 		if plain == "" && rich == "" {
 			plain = strings.TrimSpace(firstMoodString(raw, "content", "con", "ubbContent"))
@@ -163,9 +196,12 @@ func parseBoardReplies(list []gjson.Result) []MoodComment {
 			TimeText: formatMoodTime(created, firstMoodString(raw, "pubtime", "time", "createTime")),
 			Author: MoodPerson{
 				UIN:  strings.TrimSpace(firstMoodString(raw, "uin", "fuin")),
-				Name: strings.TrimSpace(firstMoodString(raw, "nickname", "nick", "name", "uinname")),
+				Name: strings.TrimSpace(firstMoodString(raw, "nick", "nickname", "name", "uinname")),
 			},
 			Media: parseBoardMedia(raw, rich),
+		}
+		if c.ID == "" && (c.Author.UIN != "" || created > 0) {
+			c.ID = c.Author.UIN + "-" + strconv.FormatInt(created, 10)
 		}
 		if c.Content == "" && len(c.Media) == 0 && c.Author.Name == "" {
 			continue
