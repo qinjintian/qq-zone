@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-07 22:00:00
+ * @LastEditTime: 2026-09-08 12:00:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -131,13 +131,16 @@ func (c *CLI) Menu(ctx context.Context) {
 
 		prompt := &survey.Select{
 			Message:  color.New(color.FgCyan, color.Bold).Sprint(menuMsg),
-			PageSize: 10,
+			PageSize: 13,
 			Options: []string{
 				"🏠 下载自己的相册",
 				"💬 备份自己的说说",
+				"💌 备份自己的留言板",
 				"👥 下载好友的相册",
 				"💭 备份好友的说说",
+				"🗒️ 备份好友的留言板",
 				"📖 查看说说备份",
+				"📘 查看留言板备份",
 				"🔁 重试上次失败项",
 				"🔍 查看对我开放的好友",
 				"⚙️ 开启/关闭调试模式",
@@ -151,24 +154,30 @@ func (c *CLI) Menu(ctx context.Context) {
 				case 1:
 					return "下载说说、配图和评论，并生成可双击打开的时间线网页"
 				case 2:
-					return "输入好友 QQ 号，备份其公开或对您开放的相册内容"
+					return "下载留言、回复和配图，并生成可双击打开的查看页"
 				case 3:
-					return "备份好友空间里对您可见的说说，同样生成本地查看页"
+					return "输入好友 QQ 号，备份其公开或对您开放的相册内容"
 				case 4:
-					return "打开已经备份过的说说时间线，无需重新登录"
+					return "备份好友空间里对您可见的说说，同样生成本地查看页"
 				case 5:
-					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
+					return "备份好友空间里对您可见的留言板"
 				case 6:
-					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+					return "打开已经备份过的说说时间线，无需重新登录"
 				case 7:
+					return "打开已经备份过的留言板，无需重新登录"
+				case 8:
+					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
+				case 9:
+					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+				case 10:
 					status := "关闭"
 					if c.logFact.IsDebug() {
 						status = "开启"
 					}
 					return fmt.Sprintf("记录 API 日志，并在备份时标注视频拉取链路 (当前: %s)", status)
-				case 8:
+				case 11:
 					return "注销当前登录状态，并准备扫码登录新账号"
-				case 9:
+				case 12:
 					return "结束本次备份任务并安全退出"
 				default:
 					return ""
@@ -204,6 +213,13 @@ func (c *CLI) Menu(ctx context.Context) {
 				}
 			}
 			c.handleMoodBackup(ctx, c.client.QQ)
+		case strings.Contains(option, "备份自己的留言板"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
+			c.handleBoardBackup(ctx, c.client.QQ)
 		case strings.Contains(option, "下载好友的相册"):
 			if c.client == nil {
 				if err := c.ensureLogin(ctx); err != nil {
@@ -230,8 +246,25 @@ func (c *CLI) Menu(ctx context.Context) {
 				continue
 			}
 			c.handleMoodBackup(ctx, targetUin)
+		case strings.Contains(option, "备份好友的留言板"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
+			var targetUin string
+			askOne(&survey.Input{
+				Message: color.New(color.FgCyan).Sprint("请输入目标 QQ 号:"),
+			}, &targetUin, survey.WithValidator(survey.Required))
+			targetUin = strings.TrimSpace(targetUin)
+			if targetUin == "" {
+				continue
+			}
+			c.handleBoardBackup(ctx, targetUin)
 		case strings.Contains(option, "查看说说备份"):
 			c.handleViewMood()
+		case strings.Contains(option, "查看留言板备份"):
+			c.handleViewBoard()
 		case strings.Contains(option, "重试上次失败项"):
 			if c.client == nil {
 				if err := c.ensureLogin(ctx); err != nil {
@@ -582,6 +615,13 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 				modeText = "说说备份"
 			}
 		}
+		if app.IsBoardTask(record) {
+			if record.Mode == app.TaskModeRetryFailed {
+				modeText = "留言板重试"
+			} else {
+				modeText = "留言板备份"
+			}
+		}
 
 		label := fmt.Sprintf(
 			"[%s] %s | 目标:%s | 待重试:%d | 成功:%d/%d | %s",
@@ -628,6 +668,10 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 
 	if app.IsShuoShuoTask(record) {
 		c.handleMoodRetry(ctx, record)
+		return
+	}
+	if app.IsBoardTask(record) {
+		c.handleBoardRetry(ctx, record)
 		return
 	}
 

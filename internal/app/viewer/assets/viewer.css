@@ -154,6 +154,40 @@ body {
   padding: 12px 16px;
   font-size: 13px;
 }
+
+.secret-text {
+  color: var(--muted);
+  font-style: italic;
+}
+.badge-secret {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  border-radius: 4px;
+  background: #f3e8ff;
+  color: #7c3aed;
+  vertical-align: middle;
+}
+html[data-theme="dark"] .badge-secret {
+  background: #3b2a55;
+  color: #d8b4fe;
+}
+.intro-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  border-left: 3px solid var(--green);
+}
+.intro-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.intro-body { min-width: 0; flex: 1; }
+.intro-card .content { margin-top: 0; }
 html[data-theme="dark"] .notice {
   background: #3d2e12;
   color: #f5d090;
