@@ -9,6 +9,25 @@
   var lightbox = document.getElementById("lightbox");
   var lbImg = document.getElementById("lb-img");
 
+  var isBoard = meta.kind === "board";
+  var copy = isBoard
+    ? {
+        empty: "没有符合条件的留言",
+        search: "搜索留言、回复…",
+        title: " 的留言",
+        more: " 条回复",
+        stats: " 条回复",
+        end: " 条"
+      }
+    : {
+        empty: "没有符合条件的说说",
+        search: "搜索说说、评论、地点…",
+        title: " 的说说",
+        more: " 条评论",
+        stats: " 条评论",
+        end: " 条"
+      };
+
   var state = {
     year: "all",
     q: "",
@@ -38,8 +57,11 @@
   }
 
   function emoteHtml(s) {
-    return String(s == null ? "" : s).replace(/\[em\]e(\d+)\[\/em\]/gi,
+    s = String(s == null ? "" : s).replace(/\[em\]e(\d+)\[\/em\]/gi,
       '<img class="emote" src="https://qzonestyle.gtimg.cn/qzone/em/e$1.gif" alt="">');
+    // 留言板 htmlContent 里的表情是相对路径 /qzone/em/e182.gif，file:// 打不开，改走官方 CDN。
+    return s.replace(/(<img\b[^>]*\bsrc=["']?)\/qzone\/em\/(e\d+\.gif)/gi,
+      "$1https://qzonestyle.gtimg.cn/qzone/em/$2");
   }
 
   function atUinHtml(s) {
@@ -82,14 +104,23 @@
     return (p.media || []).some(function (m) { return m.type === type && m.path; });
   }
 
+  function hasImage(p) {
+    if (hasType(p, "image")) return true;
+    return (p.comments || []).some(function walk(c) {
+      if ((c.media || []).some(function (m) { return m.type === "image" && m.path; })) return true;
+      return (c.replies || []).some(walk);
+    });
+  }
+
   function visiblePosts() {
     var q = state.q.trim().toLowerCase();
     return posts.filter(function (p) {
       if (state.year !== "all") {
         if (yearOf(p) !== state.year) return false;
       }
-      if (state.filter === "photo" && !hasType(p, "image")) return false;
+      if (state.filter === "photo" && !hasImage(p)) return false;
       if (state.filter === "video" && !hasType(p, "video")) return false;
+      if (state.filter === "secret" && !p.secret) return false;
       if (q && haystack(p).indexOf(q) === -1) return false;
       return true;
     });
@@ -163,7 +194,7 @@
       var shown = comments.slice(0, 2).map(commentHtml).join("");
       var rest = comments.length > 2 ? comments.slice(2).map(commentHtml).join("") : "";
       commentBlock = '<div class="comments">' + shown +
-        (rest ? '<div class="more" hidden>' + rest + '</div><button type="button" class="toggle" data-more>查看全部 ' + comments.length + " 条评论</button>" : "") +
+        (rest ? '<div class="more" hidden>' + rest + '</div><button type="button" class="toggle" data-more>查看全部 ' + comments.length + copy.more + "</button>" : "") +
         "</div>";
     }
     var likeBlock = "";
@@ -181,7 +212,7 @@
     var statsParts = [];
     if (p.visit_count) statsParts.push("浏览" + p.visit_count + "次");
     if (likeCount) statsParts.push("赞(" + likeCount + ")");
-    if (p.comment_count) statsParts.push(p.comment_count + " 条评论");
+    if (p.comment_count) statsParts.push(p.comment_count + copy.stats);
     var stats = statsParts.length
       ? '<div class="stats">' + statsParts.map(function (s) { return "<span>" + escapeHtml(s) + "</span>"; }).join("") + "</div>"
       : "";
@@ -201,34 +232,48 @@
         "</div><div class=\"content\">" + richText(p.repost.html, p.repost.content) + "</div>" +
         mediaGrid(p.repost.media, pid + "-rt") + "</div>";
     }
+    var badge = p.secret ? '<span class="badge-secret">私密</span>' : "";
     return '<article class="card" data-id="' + escapeHtml(p.tid || pid) + '">' +
       '<div class="card-head">' + avatarHtml(p.author, "avatar") +
-      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + "</div>" +
+      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + badge + "</div>" +
       '<div class="when">' + when + loc + src + "</div></div></div>" +
       '<div class="content">' + richText(p.html, p.content) + "</div>" +
       share + mediaGrid(p.media, pid) + repost + stats + likeBlock +
       commentBlock + "</article>";
   }
 
+  function introHtml() {
+    if (!isBoard || !meta.intro) return "";
+    var intro = meta.intro;
+    return '<article class="card intro-card">' + avatarHtml(intro.author, "avatar") +
+      '<div class="intro-body"><div class="intro-label">主人寄语</div>' +
+      '<div class="content">' + richText(intro.html, intro.content) + "</div></div></article>";
+  }
+
   function render() {
     var list = visiblePosts();
     var notice = meta.notice ? '<div class="notice">' + escapeHtml(meta.notice) + "</div>" : "";
+    var head = introHtml() + notice;
     if (!list.length) {
-      feed.innerHTML = notice + '<p class="empty">没有符合条件的说说</p>';
+      feed.innerHTML = head + '<p class="empty">' + copy.empty + "</p>";
       return;
     }
-    feed.innerHTML = notice + list.map(renderPost).join("") + '<p class="end">共 ' + list.length + " 条</p>";
+    feed.innerHTML = head + list.map(renderPost).join("") + '<p class="end">共 ' + list.length + copy.end + "</p>";
   }
 
   function fillHeader() {
-    var name = meta.nickname || "QQ 空间说说";
-    document.getElementById("title").textContent = name + " 的说说";
-    document.title = name + " 的说说备份";
+    var name = meta.nickname || (isBoard ? "QQ 空间留言" : "QQ 空间说说");
+    document.getElementById("title").textContent = name + copy.title;
+    document.title = name + copy.title + "备份";
     var bits = [];
     if (meta.uin) bits.push("QQ " + meta.uin);
-    bits.push((meta.total || posts.length) + " 条");
+    bits.push((meta.total || posts.length) + copy.end);
     if (meta.exported_at) bits.push("导出于 " + meta.exported_at);
     document.getElementById("subtitle").textContent = bits.join(" · ");
+    if (searchEl) searchEl.setAttribute("placeholder", copy.search);
+    if (isBoard && filterEl) {
+      filterEl.innerHTML = '<option value="all">全部</option><option value="photo">有图</option><option value="secret">私密</option>';
+    }
   }
 
   function openLightbox(imgs, idx) {

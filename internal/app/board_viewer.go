@@ -7,9 +7,9 @@
  * without the prior consent of qinjintian.
  *
  * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: mood_viewer.go
- * @Description: [把规范化说说写成可双击打开的离线 HTML 时间线]
+ * @Date: 2026-09-08
+ * @FileName: board_viewer.go
+ * @Description: [把规范化留言写成可双击打开的离线 HTML 时间线]
  */
 
 package app
@@ -27,24 +27,11 @@ import (
 	"github.com/qinjintian/qq-zone/internal/app/viewer"
 )
 
-// moodViewerMeta 写入 data/meta.js，查看页页头和年份导航用它，不读 backup.json（file:// 下 fetch 会跨域）。
-type moodViewerMeta struct {
-	UIN        string      `json:"uin"`                // 被备份空间的 QQ，页头展示
-	Nickname   string      `json:"nickname"`           // 昵称，页标题和页头用
-	ExportedAt string      `json:"exported_at"`        // 本次生成查看页的时间
-	Total      int         `json:"total"`              // 说说/留言条数
-	Years      []string    `json:"years"`              // 有内容的年份，导航栏按这个渲染（新→旧）
-	Archived   bool        `json:"archived,omitempty"` // 更早说说被封存时为 true
-	Notice     string      `json:"notice,omitempty"`   // 页顶提示文案，例如更早说说被封存
-	Kind       string      `json:"kind,omitempty"`     // 空=说说；board=留言板，查看页据此换文案
-	Intro      *BoardIntro `json:"intro,omitempty"`    // 留言板主人寄语，查看页置顶
-}
-
-// writeMoodViewer 写出 index.html、样式脚本，以及按年拆开的 posts-YYYY.js。
-// 年份脚本用 <script src> 引入，双击 file:// 打开时不会踩到 fetch 跨域。
-func writeMoodViewer(root string, file *MoodBackupFile) error {
+// writeBoardViewer 写出 index.html、样式脚本，以及按年拆开的 posts-YYYY.js。
+// 与说说共用同一套查看页模板，靠 meta.kind=board 切换文案和筛选。
+func writeBoardViewer(root string, file *BoardBackupFile) error {
 	if file == nil {
-		return fmt.Errorf("empty mood backup")
+		return fmt.Errorf("empty board backup")
 	}
 
 	assetsDir := filepath.Join(root, "assets")
@@ -65,7 +52,7 @@ func writeMoodViewer(root string, file *MoodBackupFile) error {
 
 	posts := stripMoodURLs(file.Posts)
 	for i := range posts {
-		posts[i] = repairMoodPost(posts[i]) // 生成查看页时再修一次旧备份里的表情和误包 @
+		posts[i] = repairBoardPost(posts[i])
 	}
 	byYear := map[string][]MoodPost{}
 	for _, post := range posts {
@@ -102,8 +89,9 @@ func writeMoodViewer(root string, file *MoodBackupFile) error {
 		ExportedAt: file.ExportedAt,
 		Total:      len(file.Posts),
 		Years:      years,
-		Archived:   file.Archived,
 		Notice:     file.Notice,
+		Kind:       "board",
+		Intro:      file.Intro,
 	}
 	if meta.ExportedAt == "" {
 		meta.ExportedAt = time.Now().Format("2006-01-02 15:04:05")
@@ -124,54 +112,10 @@ func writeMoodViewer(root string, file *MoodBackupFile) error {
 	index = bytes.Replace(index, []byte("<!--YEAR_SCRIPTS-->"), []byte(scriptTags.String()), 1)
 	title := strings.TrimSpace(file.Nickname)
 	if title == "" {
-		title = "QQ 空间说说"
+		title = "QQ 空间留言"
 	} else {
-		title = title + " 的说说备份"
+		title = title + " 的留言备份"
 	}
 	index = bytes.Replace(index, []byte("QQ 空间说说备份"), []byte(title), 1)
-	return os.WriteFile(filepath.Join(root, moodIndexFile), index, 0644)
-}
-
-// copyViewerAsset 把内嵌的 CSS/JS 模板拷到备份目录的 assets/ 下。
-func copyViewerAsset(src, dest string) error {
-	data, err := viewer.Files.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dest, data, 0644)
-}
-
-// stripMoodURLs 生成查看页数据前去掉原始下载地址和 vid，避免把接口链接写进可分享的 HTML。
-func stripMoodURLs(posts []MoodPost) []MoodPost {
-	raw, err := json.Marshal(posts)
-	if err != nil {
-		return posts
-	}
-	var cloned []MoodPost
-	if err := json.Unmarshal(raw, &cloned); err != nil {
-		return posts
-	}
-	var stripList func([]MoodMedia)
-	stripList = func(list []MoodMedia) {
-		for i := range list {
-			list[i].URL = ""
-			list[i].URLs = nil
-			list[i].VideoID = ""
-		}
-	}
-	var stripComments func([]MoodComment)
-	stripComments = func(cs []MoodComment) {
-		for i := range cs {
-			stripList(cs[i].Media)
-			stripComments(cs[i].Replies)
-		}
-	}
-	for i := range cloned {
-		stripList(cloned[i].Media)
-		if cloned[i].Repost != nil {
-			stripList(cloned[i].Repost.Media)
-		}
-		stripComments(cloned[i].Comments)
-	}
-	return cloned
+	return os.WriteFile(filepath.Join(root, boardIndexFile), index, 0644)
 }

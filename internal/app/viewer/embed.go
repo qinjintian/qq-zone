@@ -16,7 +16,7 @@ package viewer
 
 import "embed"
 
-// Files 是离线查看页模板，备份结束时拷到 storage/qzone/<QQ>/shuoshuo/。
+// Files 是离线查看页模板，备份结束时拷到说说或留言板目录的 assets/ 下。
 //
 //go:embed index.html assets/viewer.css assets/viewer.js
 var Files embed.FS

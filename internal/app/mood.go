@@ -91,6 +91,7 @@ type MoodPost struct {
 	VisitCount   int           `json:"visit_count,omitempty"`    // 浏览次数，来自 qz_opcnt2 current.newdata（如 PRD）
 	Comments     []MoodComment `json:"comments,omitempty"`       // 评论（含楼中楼）
 	CommentCount int           `json:"comment_count"`            // 空间侧声明的评论数
+	Secret       bool          `json:"secret,omitempty"`         // 留言板私密留言；当前账号看不到正文
 	HasMoreCon   bool          `json:"-"`                        // 列表里正文被截断，需要再拉详情
 	PicTotal     int           `json:"-"`                        // 空间侧声明的配图总数，用来判断要不要补拉
 }
