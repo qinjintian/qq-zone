@@ -46,7 +46,7 @@ type Client struct {
 
 // resumeMetadata 写在目标文件旁的 sidecar（*.resume.json），用来判断半成品能不能接着 Range。
 type resumeMetadata struct {
-	URI          string    `json:"uri"`           // 这份半成品对应的下载 URL，换源后必须作废
+	URI          string    `json:"uri"`                     // 这份半成品对应的下载 URL，换源后必须作废
 	ETag         string    `json:"etag,omitempty"`          // 远端实体标签，续传时放进 If-Range
 	LastModified string    `json:"last_modified,omitempty"` // 没有 ETag 时用修改时间做 If-Range
 	UpdatedAt    time.Time `json:"updated_at"`              // sidecar 写入时间
@@ -241,6 +241,23 @@ func (c *Client) PostForm(ctx context.Context, url string, params map[string]str
 		return nil, fmt.Errorf("http request failed with status: %s", resp.Status())
 	}
 	return resp.Body(), nil
+}
+
+// Post 发起一个 HTTP POST 请求，body 原样写入；调用方自己设 Content-Type。
+// 与 Get 一样返回状态码，方便上层按业务码或 HTTP 码决定是否换接口，而不是一遇到 4xx 就中断。
+func (c *Client) Post(ctx context.Context, url string, body string, headers map[string]string) (http.Header, []byte, int, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, nil, 0, err
+	}
+	resp, err := c.resty.R().
+		SetContext(ctx).
+		SetHeaders(headers).
+		SetBody(body).
+		Post(url)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return resp.Header(), resp.Body(), resp.StatusCode(), nil
 }
 
 // Download 执行大文件流式下载，支持 Range 续传、换源时作废半成品、以及按状态码退避重试。

@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-08 12:00:00
+ * @LastEditTime: 2026-09-20 16:20:00
  * @FileName: menu.go
  * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
  */
@@ -131,9 +131,10 @@ func (c *CLI) Menu(ctx context.Context) {
 
 		prompt := &survey.Select{
 			Message:  color.New(color.FgCyan, color.Bold).Sprint(menuMsg),
-			PageSize: 13,
+			PageSize: 14,
 			Options: []string{
 				"🏠 下载自己的相册",
+				"📂 下载群相册",
 				"💬 备份自己的说说",
 				"💌 备份自己的留言板",
 				"👥 下载好友的相册",
@@ -152,32 +153,34 @@ func (c *CLI) Menu(ctx context.Context) {
 				case 0:
 					return "快速备份您当前登录账号下的所有照片和视频"
 				case 1:
-					return "下载说说、配图和评论，并生成可双击打开的时间线网页"
+					return "备份你加入的群里的相册；原图和视频下到本地"
 				case 2:
-					return "下载留言、回复和配图，并生成可双击打开的查看页"
+					return "下载说说、配图和评论，并生成可双击打开的时间线网页"
 				case 3:
-					return "输入好友 QQ 号，备份其公开或对您开放的相册内容"
+					return "下载留言、回复和配图，并生成可双击打开的查看页"
 				case 4:
-					return "备份好友空间里对您可见的说说，同样生成本地查看页"
+					return "输入好友 QQ 号，备份其公开或对您开放的相册内容"
 				case 5:
-					return "备份好友空间里对您可见的留言板"
+					return "备份好友空间里对您可见的说说，同样生成本地查看页"
 				case 6:
-					return "打开已经备份过的说说时间线，无需重新登录"
+					return "备份好友空间里对您可见的留言板"
 				case 7:
-					return "打开已经备份过的留言板，无需重新登录"
+					return "打开已经备份过的说说时间线，无需重新登录"
 				case 8:
-					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
+					return "打开已经备份过的留言板，无需重新登录"
 				case 9:
-					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
 				case 10:
+					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+				case 11:
 					status := "关闭"
 					if c.logFact.IsDebug() {
 						status = "开启"
 					}
 					return fmt.Sprintf("记录 API 日志，并在备份时标注视频拉取链路 (当前: %s)", status)
-				case 11:
-					return "注销当前登录状态，并准备扫码登录新账号"
 				case 12:
+					return "注销当前登录状态，并准备扫码登录新账号"
+				case 13:
 					return "结束本次备份任务并安全退出"
 				default:
 					return ""
@@ -206,6 +209,13 @@ func (c *CLI) Menu(ctx context.Context) {
 				}
 			}
 			c.handleSpider(ctx, c.client.QQ)
+		case strings.Contains(option, "下载群相册"):
+			if c.client == nil {
+				if err := c.ensureLogin(ctx); err != nil {
+					continue
+				}
+			}
+			c.handleGroupAlbum(ctx)
 		case strings.Contains(option, "备份自己的说说"):
 			if c.client == nil {
 				if err := c.ensureLogin(ctx); err != nil {
@@ -413,7 +423,55 @@ func (c *CLI) handleDebugToggle() {
 func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	c.logger.Infof("🚀 正在为 [%s] 配置备份任务...", color.YellowString(targetUin))
 
-	// 定义配置表单
+	exclude, ok := c.askAlbumTaskOptions()
+	if !ok {
+		return
+	}
+
+	c.logger.Infof("📡 正在从腾讯服务器拉取相册列表...")
+	var allAlbums []gjson.Result
+	err := app.WithWaitSpinner(ctx, "正在拉取相册列表", func() error {
+		var listErr error
+		allAlbums, listErr = c.client.GetAlbumList(ctx, targetUin)
+		return listErr
+	})
+	if err != nil {
+		c.logger.Errorf("❌ 获取相册列表失败: %v", err)
+		return
+	}
+
+	if len(allAlbums) == 0 {
+		c.logger.Warnf("⚠️  该账号 [%s] 没有任何公开相册或登录已失效", targetUin)
+		return
+	}
+
+	finalAlbums, ok := c.pickAlbums(allAlbums)
+	if !ok {
+		return
+	}
+
+	taskLogger := c.createTaskLogger(targetUin)
+	record := app.NewTaskRecord(app.TaskModeBackup, c.client.QQ, targetUin, finalAlbums, c.config, exclude)
+	c.saveTaskRecord(record, nil, nil, app.TaskStatusPending)
+
+	spider := app.NewSpider(c.client, c.config, finalAlbums, taskLogger)
+
+	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在下载 ━━━━━━━━━━━━━━━━━━━━━━"))
+	results, runErr := spider.Download(ctx, targetUin, exclude)
+	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
+
+	status := c.determineTaskStatus(ctx, results, runErr)
+	c.saveTaskRecord(record, results, runErr, status)
+
+	if runErr != nil {
+		c.logger.Errorf("❌ 备份过程中发生异常中断: %v", runErr)
+	}
+
+	c.renderTaskSummary("⭐ 备份任务报告 ⭐", targetUin, results, record, true)
+}
+
+// askAlbumTaskOptions 询问并发、增量、时间线和元数据导出；成功时写回 config。
+func (c *CLI) askAlbumTaskOptions() (exclude bool, ok bool) {
 	var answers struct {
 		TaskLimit            string
 		Exclude              bool
@@ -474,21 +532,17 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 		},
 	}
 
-	// 统一配置图标样式
 	opts := survey.WithIcons(func(icons *survey.IconSet) {
 		icons.Question.Text = "?"
 		icons.Question.Format = "cyan"
 	})
-
-	// 使用批量提问模式，这是解决 Windows 终端重复输出和空行问题的最稳健方案
 	if err := ask(questions, &answers, opts, survey.WithStdio(os.Stdin, os.Stdout, os.Stderr)); err != nil {
-		return
+		return false, false
 	}
 
-	// 更新配置
 	if strings.ToLower(answers.TaskLimit) == "auto" || answers.TaskLimit == "" {
 		c.config.EnableDynamicTaskLimit = true
-		c.config.TaskLimit = 10 // 设置一个基础的底线并发
+		c.config.TaskLimit = 10
 	} else {
 		c.config.EnableDynamicTaskLimit = false
 		c.config.TaskLimit, _ = strconv.Atoi(answers.TaskLimit)
@@ -497,32 +551,16 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	c.config.EnableTimeline = answers.EnableTimeline
 	c.config.EnableMetadataExport = answers.EnableMetadataExport
 	_ = c.config.Save()
-	exclude := answers.Exclude
+	return answers.Exclude, true
+}
 
-	c.logger.Infof("📡 正在从腾讯服务器拉取相册列表...")
-	var allAlbums []gjson.Result
-	err := app.WithWaitSpinner(ctx, "正在拉取相册列表", func() error {
-		var listErr error
-		allAlbums, listErr = c.client.GetAlbumList(ctx, targetUin)
-		return listErr
-	})
-	if err != nil {
-		c.logger.Errorf("❌ 获取相册列表失败: %v", err)
-		return
-	}
-
-	if len(allAlbums) == 0 {
-		c.logger.Warnf("⚠️  该账号 [%s] 没有任何公开相册或登录已失效", targetUin)
-		return
-	}
-
-	// 2. 准备多选菜单
+// pickAlbums 勾选要备份的相册；nil 表示全部。ok 为 false 时调用方应直接返回。
+func (c *CLI) pickAlbums(allAlbums []gjson.Result) (finalAlbums []string, ok bool) {
 	albumOptions := []string{"[全选/全不选]"}
 	albumMap := make(map[string]gjson.Result)
 	for _, album := range allAlbums {
 		name := album.Get("name").String()
 		count := album.Get("total").Int()
-		// 格式化选项显示：相册名 (数量)
 		label := fmt.Sprintf("%-30s (%d)", name, count)
 		albumOptions = append(albumOptions, label)
 		albumMap[label] = album
@@ -530,12 +568,11 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 
 	selectedLabels := []string{}
 	promptSelect := &survey.MultiSelect{
-		Message:  color.New(color.FgCyan).Sprint("📂 请勾选要备份的相册 (空格选中):"),
+		Message:  color.New(color.FgCyan).Sprint("📂 请勾选要备份的相册 (空格选中，回车确认):"),
 		Options:  albumOptions,
 		PageSize: 15,
 	}
 
-	// 使用自定义图标美化勾选框
 	iconOpt := survey.WithIcons(func(icons *survey.IconSet) {
 		icons.Question.Text = "❓"
 		icons.SelectFocus.Text = "▶"
@@ -544,11 +581,9 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	})
 
 	if err := askOne(promptSelect, &selectedLabels, iconOpt); err != nil {
-		return
+		return nil, false
 	}
 
-	// 3. 处理选择逻辑
-	var finalAlbums []string
 	isSelectAll := false
 	for _, label := range selectedLabels {
 		if label == "[全选/全不选]" {
@@ -558,35 +593,16 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	}
 
 	if isSelectAll || len(selectedLabels) == 0 {
-		finalAlbums = nil // nil 交给 Spider 表示备份全部相册
 		c.logger.Info("✅ 已确认: 备份全部相册")
-	} else {
-		for _, label := range selectedLabels {
-			if album, ok := albumMap[label]; ok {
-				finalAlbums = append(finalAlbums, album.Get("name").String())
-			}
+		return nil, true
+	}
+	for _, label := range selectedLabels {
+		if album, ok := albumMap[label]; ok {
+			finalAlbums = append(finalAlbums, album.Get("name").String())
 		}
-		c.logger.Infof("✅ 已确认: 备份 %d 个指定相册", len(finalAlbums))
 	}
-
-	taskLogger := c.createTaskLogger(targetUin)
-	record := app.NewTaskRecord(app.TaskModeBackup, c.client.QQ, targetUin, finalAlbums, c.config, exclude)
-	c.saveTaskRecord(record, nil, nil, app.TaskStatusPending)
-
-	spider := app.NewSpider(c.client, c.config, finalAlbums, taskLogger)
-
-	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在下载 ━━━━━━━━━━━━━━━━━━━━━━"))
-	results, runErr := spider.Download(ctx, targetUin, exclude)
-	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
-
-	status := c.determineTaskStatus(ctx, results, runErr)
-	c.saveTaskRecord(record, results, runErr, status)
-
-	if runErr != nil {
-		c.logger.Errorf("❌ 备份过程中发生异常中断: %v", runErr)
-	}
-
-	c.renderTaskSummary("⭐ 备份任务报告 ⭐", targetUin, results, record, true)
+	c.logger.Infof("✅ 已确认: 备份 %d 个指定相册", len(finalAlbums))
+	return finalAlbums, true
 }
 
 // handleRetryLastFailed 展示当前账号下全部可重试的历史任务，并允许用户手动选择一个任务重试。
@@ -622,12 +638,28 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 				modeText = "留言板备份"
 			}
 		}
+		if app.IsGroupAlbumTask(record) {
+			if record.Mode == app.TaskModeRetryFailed {
+				modeText = "群相册重试"
+			} else {
+				modeText = "群相册备份"
+			}
+		}
+
+		target := record.TargetUin
+		if record.GroupID != "" {
+			if record.GroupName != "" {
+				target = record.GroupName + " / " + record.GroupID
+			} else {
+				target = "群 " + record.GroupID
+			}
+		}
 
 		label := fmt.Sprintf(
 			"[%s] %s | 目标:%s | 待重试:%d | 成功:%d/%d | %s",
 			record.ID,
 			record.CreatedAt.Format("2006-01-02 15:04:05"),
-			record.TargetUin,
+			target,
 			len(record.OpenFailedItems),
 			record.Summary.Success,
 			record.Summary.Total,
@@ -686,7 +718,12 @@ func (c *CLI) handleRetryLastFailed(ctx context.Context) {
 	retryRecord := app.NewRetryTaskRecord(record, taskCfg)
 	c.saveTaskRecord(retryRecord, nil, nil, app.TaskStatusPending)
 
-	spider := app.NewSpider(c.client, taskCfg, record.Albums, taskLogger)
+	var spider *app.Spider
+	if app.IsGroupAlbumTask(record) {
+		spider = app.NewGroupSpider(c.client, taskCfg, record.Albums, record.GroupID, record.GroupName, taskLogger)
+	} else {
+		spider = app.NewSpider(c.client, taskCfg, record.Albums, taskLogger)
+	}
 
 	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在重试失败项 ━━━━━━━━━━━━━━━━━━━━━━"))
 	results, runErr := spider.RetryFailed(ctx, record.TargetUin, record.OpenFailedItems)

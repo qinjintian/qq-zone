@@ -428,9 +428,7 @@ func normalizeMediaURL(s string) string {
 			}
 		}
 	}
-	if strings.Contains(s, "b&bo=") {
-		s = strings.Replace(s, "b&bo=", "o&bo=", 1)
-	}
+	s = strings.Replace(s, "b&bo=", "o&bo=", 1)
 	return s
 }
 
@@ -519,8 +517,11 @@ func renderMoodContent(item gjson.Result) (plain, rich string) {
 				if nick == "" {
 					nick = strings.TrimSpace(node.Get("uin").String())
 				}
-				plainB.WriteString("@" + nick)
-				htmlB.WriteString(`<span class="mention">@` + html.EscapeString(nick) + `</span>`)
+				plainB.WriteByte('@')
+				plainB.WriteString(nick)
+				htmlB.WriteString(`<span class="mention">@`)
+				htmlB.WriteString(html.EscapeString(nick))
+				htmlB.WriteString(`</span>`)
 				return true
 			}
 			text := node.Get("con").String()

@@ -8,6 +8,8 @@
  *
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-07
+ * @LastEditors: qinjintian<514092640@qq.com>
+ * @LastEditTime: 2026-09-20 16:10:00
  * @FileName: session.go
  * @Description: [登录会话持久化管理，支持多账号 Session 的保存、加载与切换]
  */
@@ -29,11 +31,12 @@ var (
 
 // Session 记录了单个账号登录状态的核心凭证与信息
 type Session struct {
-	QQ       string    `json:"qq"`        // 账号的唯一标识
-	Nickname string    `json:"nickname"`  // 账号的展示昵称
-	GTK      string    `json:"g_tk"`      // 根据 p_skey 算出的防跨站 CSRF 凭证
-	Cookie   string    `json:"cookie"`    // 请求 API 必须携带的持久化 Cookie 串
-	LastUsed time.Time `json:"last_used"` // 最后一次使用的时间
+	QQ        string    `json:"qq"`                   // 账号的唯一标识
+	Nickname  string    `json:"nickname"`             // 账号的展示昵称
+	GTK       string    `json:"g_tk"`                 // 根据 p_skey 算出的防跨站 CSRF 凭证
+	Cookie    string    `json:"cookie"`               // QQ 空间接口 Cookie
+	QunCookie string    `json:"qun_cookie,omitempty"` // 群管理页 Cookie，用来列出加入的群
+	LastUsed  time.Time `json:"last_used"`            // 最后一次使用的时间
 }
 
 // LoadSessions 从本地 session.json，返回当前存储的所有历史账号信息
@@ -148,4 +151,19 @@ func saveSessionsToFile(sessions map[string]*Session) error {
 	}
 
 	return os.WriteFile(SessionPath, data, 0644)
+}
+
+// qunCookieForQQ 取出该号上次授权过的群管理页 Cookie；没有则空。空间重新扫码时用来接着用。
+func qunCookieForQQ(qq string) string {
+	if qq == "" {
+		return ""
+	}
+	sessions, err := LoadSessions()
+	if err != nil || sessions == nil {
+		return ""
+	}
+	if s := sessions[qq]; s != nil {
+		return s.QunCookie
+	}
+	return ""
 }

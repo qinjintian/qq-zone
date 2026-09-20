@@ -9,9 +9,9 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 17:10:00
+ * @LastEditTime: 2026-09-20 16:10:00
  * @FileName: qzone.go
- * @Description: [QQ 空间扫码登录流程实现，包含二维码生成、状态轮询及登录凭证提取]
+ * @Description: [QQ 空间 / 群管理页扫码登录：二维码生成、状态轮询及登录凭证提取]
  */
 
 package qzone
@@ -41,6 +41,38 @@ const (
 	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+// qrLoginTarget 区分空间登录和群管理页授权：appid / daid 不同，拿到的 p_skey 也不能混用。
+type qrLoginTarget struct {
+	appID     string // ptlogin 应用 ID，空间是 549000912，群管理页是 715030901
+	daid      string // 登录域，决定 p_skey 绑在哪个站点，不能混用
+	jumpURL   string // 扫码成功后的跳转地址
+	xloginURL string // 取 pt_login_sig 的 xlogin 页面
+	qrHint    string // 二维码出现时的提示
+	scanHint  string // 已扫码、等手机确认时的提示
+}
+
+func qzoneQRTarget() qrLoginTarget {
+	return qrLoginTarget{
+		appID:     "549000912",
+		daid:      "5",
+		jumpURL:   "https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone",
+		xloginURL: "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?proxy_url=https://qzs.qq.com/qzone/v6/portal/proxy.html&daid=5&&hide_title_bar=1&low_login=0&qlogin_auto_login=1&no_verifyimg=1&link_target=blank&appid=549000912&style=22&target=self&s_url=https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone&pt_qr_app=手机QQ空间&pt_qr_link=https://z.qzone.com/download.html&self_regurl=https://qzs.qq.com/qzone/v6/reg/index.html&pt_qr_help_link=https://z.qzone.com/download.html&pt_no_auth=0",
+		qrHint:    "二维码已生成，请使用手机 QQ 扫描登录",
+		scanHint:  "已扫码，请在手机上确认登录",
+	}
+}
+
+func qunQRTarget() qrLoginTarget {
+	return qrLoginTarget{
+		appID:     "715030901",
+		daid:      "73",
+		jumpURL:   "https://qun.qq.com/member.html",
+		xloginURL: "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?pt_disable_pwd=1&appid=715030901&daid=73&hide_close_icon=1&pt_no_auth=1&s_url=https%3A%2F%2Fqun.qq.com%2Fmember.html",
+		qrHint:    "请用当前这个 QQ 扫码授权群列表。这不是重新登录空间。",
+		scanHint:  "已扫码，请在手机上点确认（只授权群列表）",
+	}
+}
+
 // LoginHandler 处理 QQ 空间扫码登录相关的全部交互逻辑。
 type LoginHandler struct {
 	http *ihttp.Client // 请求 ptlogin / xlogin 所用的 HTTP 客户端
@@ -53,11 +85,18 @@ func NewLoginHandler(httpClient *ihttp.Client) *LoginHandler {
 	}
 }
 
-// Login 执行扫码登录流程
-// 包含获取登录凭证、下载二维码、轮询扫码状态、提取并验证最终 Cookie 的全过程
+// Login 执行 QQ 空间扫码登录。
 func (q *LoginHandler) Login(ctx context.Context) (map[string]string, error) {
-	r, err := q.loopUntilLogin(ctx)
-	// 无论登录成功还是失败，都清理掉根目录下的二维码图片
+	return q.login(ctx, qzoneQRTarget())
+}
+
+// LoginQun 扫码授权 qun.qq.com，用来列出加入的群。不是重新登录空间。
+func (q *LoginHandler) LoginQun(ctx context.Context) (map[string]string, error) {
+	return q.login(ctx, qunQRTarget())
+}
+
+func (q *LoginHandler) login(ctx context.Context, target qrLoginTarget) (map[string]string, error) {
+	r, err := q.loopUntilLogin(ctx, target)
 	_ = os.Remove(QRCodeSavePath)
 	if err != nil {
 		return nil, err
@@ -77,14 +116,14 @@ func (q *LoginHandler) Login(ctx context.Context) (map[string]string, error) {
 
 // loopUntilLogin 轮询二维码直到登录成功或上下文取消。
 // 二维码过期（状态 65）会重新拉 login_sig 并换一张码；成功时返回昵称、跳转地址和已捕获的 Cookie。
-func (q *LoginHandler) loopUntilLogin(ctx context.Context) (map[string]string, error) {
+func (q *LoginHandler) loopUntilLogin(ctx context.Context, target qrLoginTarget) (map[string]string, error) {
 StartLoop:
-	loginSig, err := q.getLoginSig(ctx)
+	loginSig, err := q.getLoginSig(ctx, target)
 	if err != nil {
 		return nil, err
 	}
 
-	header, err := q.downloadQRCode(ctx)
+	header, err := q.downloadQRCode(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +151,7 @@ StartLoop:
 			}
 		}
 
-		str, header, err := q.checkLoginStatus(ctx, ptqrtoken, loginSig, qrsig)
+		str, header, err := q.checkLoginStatus(ctx, ptqrtoken, loginSig, qrsig, target)
 		if err != nil {
 			return nil, err
 		}
@@ -139,12 +178,12 @@ StartLoop:
 			goto StartLoop
 		case "66": // 等待扫码；只在第一次打印终端二维码，避免刷屏
 			if isFirstLoop {
-				fmt.Println(time.Now().Format("15:04:05"), "二维码已生成，请扫码登录")
+				fmt.Println(time.Now().Format("15:04:05"), target.qrHint)
 				q.printQRCodeToTerminal()
 			}
 			isFirstLoop = false
 		case "67": // 已扫码，等待手机确认
-			fmt.Println(time.Now().Format("15:04:05"), "已扫码，请在手机上点击确认")
+			fmt.Println(time.Now().Format("15:04:05"), target.scanHint)
 			isFirstLoop = true
 		case "0": // 登录成功，s[2] 是换票跳转地址
 			nickname := ""
@@ -170,13 +209,13 @@ StartLoop:
 
 // checkLoginStatus 向 ptqrlogin 查询一次当前二维码状态（真正的轮询在 loopUntilLogin）。
 // 返回的 JSONP 状态码如：65(失效)、66(等待扫码)、67(已扫码待确认)、0(登录成功)。
-func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig, qrsig string) (string, http.Header, error) {
+func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig, qrsig string, target qrLoginTarget) (string, http.Header, error) {
 	headers := map[string]string{
 		"user-agent": UserAgent,
 		"cookie":     "qrsig=" + qrsig + ";",
 	}
 
-	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=549000912&daid=5&has_onekey=1", url.QueryEscape("https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone"), ptqrtoken, time.Now().Unix()*1000, loginSig)
+	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrlogin?u1=%s&ptqrtoken=%v&ptredirect=0&h=1&t=1&g=1&from_ui=1&ptlang=2052&action=0-0-%d&js_ver=21010623&js_type=1&login_sig=%v&pt_uistyle=40&aid=%s&daid=%s&has_onekey=1", url.QueryEscape(target.jumpURL), ptqrtoken, time.Now().Unix()*1000, loginSig, target.appID, target.daid)
 	header, body, code, err := q.http.Get(ctx, apiURL, headers)
 	if err != nil {
 		return "", nil, err
@@ -188,9 +227,9 @@ func (q *LoginHandler) checkLoginStatus(ctx context.Context, ptqrtoken, loginSig
 }
 
 // downloadQRCode 获取最新的 QQ 空间登录二维码图片流，并落盘保存
-func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) {
+func (q *LoginHandler) downloadQRCode(ctx context.Context, target qrLoginTarget) (http.Header, error) {
 	// t 是随机数，防止中间层把过期二维码缓存下来。
-	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrshow?appid=549000912&e=2&l=M&s=3&d=72&v=4&t=%f&daid=5&pt_3rd_aid=0", rand.Float64())
+	apiURL := fmt.Sprintf("https://ssl.ptlogin2.qq.com/ptqrshow?appid=%s&e=2&l=M&s=3&d=72&v=4&t=%f&daid=%s&pt_3rd_aid=0", target.appID, rand.Float64(), target.daid)
 	header, body, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
 	if err != nil {
 		return nil, err
@@ -214,9 +253,8 @@ func (q *LoginHandler) downloadQRCode(ctx context.Context) (http.Header, error) 
 
 // getLoginSig 访问 xlogin 页面，从 Set-Cookie 取出 pt_login_sig。
 // 该签名要原样传给 ptqrlogin，否则轮询会被服务端拒绝。
-func (q *LoginHandler) getLoginSig(ctx context.Context) (string, error) {
-	apiURL := "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?proxy_url=https://qzs.qq.com/qzone/v6/portal/proxy.html&daid=5&&hide_title_bar=1&low_login=0&qlogin_auto_login=1&no_verifyimg=1&link_target=blank&appid=549000912&style=22&target=self&s_url=https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone&pt_qr_app=手机QQ空间&pt_qr_link=https://z.qzone.com/download.html&self_regurl=https://qzs.qq.com/qzone/v6/reg/index.html&pt_qr_help_link=https://z.qzone.com/download.html&pt_no_auth=0"
-	header, _, code, err := q.http.Get(ctx, apiURL, map[string]string{"user-agent": UserAgent})
+func (q *LoginHandler) getLoginSig(ctx context.Context, target qrLoginTarget) (string, error) {
+	header, _, code, err := q.http.Get(ctx, target.xloginURL, map[string]string{"user-agent": UserAgent})
 	if err != nil {
 		return "", err
 	}
@@ -285,20 +323,44 @@ func (q *LoginHandler) getCredentials(ctx context.Context, redirectURL string, i
 		"ptcz": true, "RK": true, "pt2ggid": true, "pgv_pvid": true,
 	}
 
-	for _, c := range resp.Header.Values("Set-Cookie") {
-		parts := strings.SplitN(strings.Split(c, ";")[0], "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		name, val := parts[0], parts[1]
-		if val == "" {
-			continue
-		}
-		if needs[name] {
-			if name == "p_skey" {
-				pSkey = val
+	takeCookies := func(h http.Header) {
+		for _, c := range h.Values("Set-Cookie") {
+			parts := strings.SplitN(strings.Split(c, ";")[0], "=", 2)
+			if len(parts) != 2 {
+				continue
 			}
-			cookiesMap[name] = val
+			name, val := parts[0], parts[1]
+			if val == "" {
+				continue
+			}
+			if needs[name] {
+				if name == "p_skey" {
+					pSkey = val
+				}
+				cookiesMap[name] = val
+			}
+		}
+	}
+	takeCookies(resp.Header)
+
+	if pSkey == "" {
+		if loc := strings.TrimSpace(resp.Header.Get("Location")); loc != "" {
+			next := loc
+			if resp.Request != nil && resp.Request.URL != nil {
+				if u, err := resp.Request.URL.Parse(loc); err == nil {
+					next = u.String()
+				}
+			}
+			req2, err := http.NewRequestWithContext(ctx, "GET", next, nil)
+			if err == nil {
+				for k, v := range headers {
+					req2.Header.Set(k, v)
+				}
+				if resp2, err := client.Do(req2); err == nil {
+					takeCookies(resp2.Header)
+					_ = resp2.Body.Close()
+				}
+			}
 		}
 	}
 
@@ -368,6 +430,22 @@ func extractCookieValue(header, key string) string {
 		p = strings.TrimSpace(p)
 		if strings.HasPrefix(p, key+"=") {
 			return strings.TrimPrefix(p, key+"=")
+		}
+	}
+	return ""
+}
+
+// qqFromCookie 从 uin / p_uin 取出纯数字 QQ 号。
+func qqFromCookie(cookie string) string {
+	for _, key := range []string{"uin", "p_uin"} {
+		raw := extractCookieValue(cookie, key)
+		if raw == "" {
+			continue
+		}
+		raw = strings.TrimPrefix(raw, "o")
+		raw = strings.TrimLeft(raw, "0")
+		if raw != "" {
+			return raw
 		}
 	}
 	return ""
