@@ -47,6 +47,9 @@ const FailedKindShuoShuo = "shuoshuo"
 // FailedKindBoard 标记这条失败记录来自留言板备份。
 const FailedKindBoard = "board"
 
+// FailedKindGroup 标记这条失败记录来自群相册备份。
+const FailedKindGroup = "group"
+
 // FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
 	Album     string `json:"album"`                // 相册名称；说说固定「说说」，留言板固定「留言板」
@@ -57,10 +60,12 @@ type FailedItem struct {
 	AlbumRaw  string `json:"album_raw,omitempty"`  // 当时的相册 JSON，重试时还原字段
 	PhotoRaw  string `json:"photo_raw,omitempty"`  // 当时的照片 JSON，重试时重新解析 URL
 	IsVideo   bool   `json:"is_video,omitempty"`   // 是否视频（含按视频链路保存的实况图）
-	Kind      string `json:"kind,omitempty"`       // 空=相册；shuoshuo=说说；board=留言板
+	Kind      string `json:"kind,omitempty"`       // 空=个人相册；shuoshuo=说说；board=留言板；group=群相册
 	MoodTID   string `json:"mood_tid,omitempty"`   // 说说 tid 或留言 id，重试时用来找回同一条
 	MediaURL  string `json:"media_url,omitempty"`  // 上次失败时用过的下载地址，详情失败时作兜底
 	MediaID   string `json:"media_id,omitempty"`   // 配图/视频在该条说说或留言里的稳定 id
+	GroupID   string `json:"group_id,omitempty"`   // 群号；群相册失败重试时用来拼本地目录
+	GroupName string `json:"group_name,omitempty"` // 群名，仅展示
 }
 
 // DownloadResult 用于原子化地统计整个备份任务的最终成果与各项指标。
@@ -92,6 +97,8 @@ type Spider struct {
 	config    *Config            // 并发、时间线、调试等任务配置
 	logger    *zap.SugaredLogger // 本次任务日志
 	results   DownloadResult     // 整次任务的成功/失败统计
+	groupID   string             // 非空表示群相册模式，目录写到 qun/<群号>/
+	groupName string             // 群名，写入失败项方便对照
 
 	debugMu    sync.Mutex      // 保护下面调试日志队列和链路计数，下载协程会并发写入
 	debugLines []string        // 回退/失败明细，等当前相册进度条结束后再打印，避免和 mpb 抢终端
@@ -130,13 +137,37 @@ func NewSpider(client *qzone.Client, config *Config, albums []string, logger *za
 	}
 }
 
+// NewGroupSpider 实例化群相册下载爬虫。文件落到 storage/qzone/<登录QQ>/qun/<群号>/。
+func NewGroupSpider(client *qzone.Client, config *Config, albums []string, groupID, groupName string, logger *zap.SugaredLogger) *Spider {
+	s := NewSpider(client, config, albums, logger)
+	s.groupID = strings.TrimSpace(groupID)
+	s.groupName = strings.TrimSpace(groupName)
+	return s
+}
+
+func (s *Spider) isGroupMode() bool {
+	return s != nil && s.groupID != ""
+}
+
 // Download 开始执行批量相册下载任务。相册串行处理，单个相册内部再并发下文件。
 func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
 	p := mpb.NewWithContext(ctx)
-	wait := waitSpinner(p, "正在拉取相册列表")
-	albums, err := s.client.GetAlbumList(ctx, targetUin)
+	waitName := "正在拉取相册列表"
+	if s.isGroupMode() {
+		waitName = "正在拉取群相册列表"
+	}
+	wait := waitSpinner(p, waitName)
+	var (
+		albums []gjson.Result
+		err    error
+	)
+	if s.isGroupMode() {
+		albums, err = s.client.GetGroupAlbumList(ctx, s.groupID)
+	} else {
+		albums, err = s.client.GetAlbumList(ctx, targetUin)
+	}
 	stopWaitSpinner(wait)
 	if err != nil {
 		p.Wait()
@@ -144,7 +175,11 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	}
 
 	if len(albums) == 0 {
-		s.logger.Warnf("未发现任何相册，请确认账号 [%s] 空间是否开放或登录是否失效", targetUin)
+		if s.isGroupMode() {
+			s.logger.Warnf("未发现群相册，请确认群号 [%s] 是否正确、你是否仍在群内", s.groupID)
+		} else {
+			s.logger.Warnf("未发现任何相册，请确认账号 [%s] 空间是否开放或登录是否失效", targetUin)
+		}
 	}
 
 	// 丢掉无权访问的，以及用户没勾选的相册。
@@ -240,12 +275,15 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 				AlbumRaw:  item.AlbumRaw,
 				PhotoRaw:  item.PhotoRaw,
 				IsVideo:   item.IsVideo,
+				Kind:      item.Kind,
+				GroupID:   item.GroupID,
+				GroupName: item.GroupName,
 			})
 			retryBar.Increment()
 			continue
 		}
 
-		albumPath := s.buildAlbumPath(targetUin, album.Get("name").String())
+		albumPath := s.buildMediaDir(targetUin, album.Get("name").String(), s.groupIDForItem(item, album))
 		localFiles, ok := localFileCache[albumPath]
 		if !ok {
 			localFiles = s.buildLocalFileIndex(albumPath, true)
@@ -279,7 +317,15 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		_ = os.WriteFile(metaPath, []byte(album.Raw), 0644)
 	}
 
-	photos, err := s.client.GetPhotoList(ctx, targetUin, albumID)
+	var (
+		photos []gjson.Result
+		err    error
+	)
+	if s.isGroupMode() {
+		photos, err = s.client.GetGroupPhotoList(ctx, s.groupID, albumID)
+	} else {
+		photos, err = s.client.GetPhotoList(ctx, targetUin, albumID)
+	}
 	if err != nil {
 		return err
 	}
@@ -293,10 +339,14 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		return nil
 	}
 
+	albumLabel := fmt.Sprintf("Album [%s] ", albumName)
+	if albumTotal > 0 {
+		albumLabel = fmt.Sprintf("Album [%s] (%d/%d) ", albumName, albumIdx, albumTotal)
+	}
 	albumBar := p.AddBar(int64(len(photos)),
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
-			decor.Name(fmt.Sprintf("Album [%s] ", albumName), decor.WC{W: 20, C: decor.DindentRight}),
+			decor.Name(albumLabel, decor.WC{W: 20, C: decor.DindentRight}),
 			decor.CountersNoUnit("%d / %d"),
 		),
 		mpb.AppendDecorators(
@@ -479,9 +529,7 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 	if imgSource == "" {
 		imgSource = photo.Get("url").String()
 	}
-	if strings.Contains(imgSource, "b&bo=") {
-		imgSource = strings.Replace(imgSource, "b&bo=", "o&bo=", 1)
-	}
+	imgSource = strings.Replace(imgSource, "b&bo=", "o&bo=", 1)
 
 	imgPrefix := "IMG_"
 	if isVideo {
@@ -499,7 +547,18 @@ func (s *Spider) downloadItem(ctx context.Context, p *mpb.Progress, targetUin st
 
 	if isVideo {
 		// 下载时再解析视频多源，避免相册列表里的 URL 排队后过期。
-		source, videoErr := s.client.GetVideoSource(ctx, targetUin, album.Get("id").String(), sloc, photo)
+		var (
+			source   *qzone.VideoSource
+			videoErr error
+		)
+		if s.isGroupMode() {
+			source = qzone.GroupVideoSource(photo)
+			if source == nil || len(source.Candidates) == 0 {
+				videoErr = fmt.Errorf("群相册视频地址为空")
+			}
+		} else {
+			source, videoErr = s.client.GetVideoSource(ctx, targetUin, album.Get("id").String(), sloc, photo)
+		}
 		if videoErr != nil || source == nil || len(source.Candidates) == 0 {
 			s.results.addFailedItem(s.makeFailedItem(targetUin, album, photo, sloc, videoErr, true))
 			return nil
@@ -778,6 +837,8 @@ func (s *Spider) buildDownloadHeaders(targetUin, rawURL string, isVideo bool, ki
 	}
 	if kind == qzone.VideoSourceGetInfo {
 		headers["Referer"] = "https://v.qq.com/"
+	} else if s.isGroupMode() {
+		headers["Referer"] = fmt.Sprintf("https://h5.qzone.qq.com/groupphoto/index?inqq=1&groupId=%s", s.groupID)
 	} else {
 		headers["Referer"] = fmt.Sprintf("https://user.qzone.qq.com/%s/infocenter", targetUin)
 	}
@@ -1078,9 +1139,17 @@ func shortVideoErr(err error) string {
 	return msg
 }
 
-// buildAlbumPath 生成本地相册目录 storage/qzone/<QQ>/album/<相册名>；非法路径名则改用哈希。
+// buildAlbumPath 生成本地相册目录 storage/qzone/<QQ>/album/<相册名>；群相册则写到 qun/<群号>/。
 func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {
+	return s.buildMediaDir(targetUin, albumName, s.groupID)
+}
+
+// buildMediaDir 按个人相册或群相册拼本地目录；非法路径名则改用哈希。
+func (s *Spider) buildMediaDir(targetUin string, albumName string, groupID string) string {
 	baseDir := filepath.Join("storage", "qzone", targetUin, "album")
+	if groupID = strings.TrimSpace(groupID); groupID != "" {
+		baseDir = filepath.Join("storage", "qzone", targetUin, "qun", sanitizePath(groupID))
+	}
 	safeName := sanitizePath(albumName)
 	albumPath := filepath.Join(baseDir, safeName)
 
@@ -1090,6 +1159,16 @@ func (s *Spider) buildAlbumPath(targetUin string, albumName string) string {
 	}
 
 	return albumPath
+}
+
+func (s *Spider) groupIDForItem(item FailedItem, album gjson.Result) string {
+	if id := strings.TrimSpace(item.GroupID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(album.Get("_group_id").String()); id != "" {
+		return id
+	}
+	return s.groupID
 }
 
 // buildLocalFileIndex 增量时按「去掉扩展名的文件名」建索引，用来匹配即将下载的 IMG_/VID_ 文件。
@@ -1120,7 +1199,7 @@ func (s *Spider) makeFailedItem(targetUin string, album, photo gjson.Result, nam
 		errMsg = err.Error()
 	}
 
-	return FailedItem{
+	item := FailedItem{
 		Album:     album.Get("name").String(),
 		Name:      name,
 		Error:     errMsg,
@@ -1130,6 +1209,29 @@ func (s *Spider) makeFailedItem(targetUin string, album, photo gjson.Result, nam
 		PhotoRaw:  photo.Raw,
 		IsVideo:   isVideo,
 	}
+	if s.isGroupMode() {
+		item.Kind = FailedKindGroup
+		item.GroupID = s.groupID
+		item.GroupName = s.groupName
+	}
+	return item
+}
+
+// IsGroupAlbumTask 判断任务是否来自群相册备份。重试任务的 Mode 仍是 retry_failed，所以还要看群号和 Kind。
+func IsGroupAlbumTask(record *TaskRecord) bool {
+	if record == nil {
+		return false
+	}
+	if record.Mode == TaskModeGroupAlbum || strings.TrimSpace(record.GroupID) != "" {
+		return true
+	}
+	if len(record.OpenFailedItems) > 0 && (record.OpenFailedItems[0].Kind == FailedKindGroup || record.OpenFailedItems[0].GroupID != "") {
+		return true
+	}
+	if len(record.FailedItems) > 0 && (record.FailedItems[0].Kind == FailedKindGroup || record.FailedItems[0].GroupID != "") {
+		return true
+	}
+	return false
 }
 
 // trackWrittenBytes 把本次写出的字节累加进 BytesDone，动态并发每 2 秒用它算吞吐。

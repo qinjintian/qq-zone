@@ -9,7 +9,7 @@
  * @Author: qinjintian<514092640@qq.com>
  * @Date: 2026-07-02
  * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
+ * @LastEditTime: 2026-09-20 16:10:00
  * @FileName: client.go
  * @Description: [QQ 空间核心 API 客户端，封装相册、照片及视频下载地址的获取逻辑]
  */
@@ -36,7 +36,8 @@ type Client struct {
 	QQ        string             // 当前登录用户的 QQ 号码
 	Nickname  string             // 当前登录用户的昵称
 	GTK       string             // 算出的 QQ 空间 CSRF 校验 Token (g_tk)
-	Cookie    string             // 用户登录状态的 Cookie 字符串
+	Cookie    string             // QQ 空间接口 Cookie
+	QunCookie string             // 群管理页 Cookie；有 p_skey 才能列出加入的群
 	Http      *http.Client       // 底层 HTTP 客户端，负责发送网络请求
 	APILogger *zap.SugaredLogger // 专门用于记录 API 请求和响应的日志记录器
 }
@@ -63,6 +64,7 @@ func NewClientWithSession(ctx context.Context, sess *Session, httpClient *http.C
 		Nickname:  sess.Nickname,
 		GTK:       sess.GTK,
 		Cookie:    sess.Cookie,
+		QunCookie: sess.QunCookie,
 		Http:      httpClient,
 		APILogger: apiLogger,
 	}
@@ -85,28 +87,22 @@ func NewClientWithQR(ctx context.Context, httpClient *http.Client, logFact *logg
 	}
 
 	cookie := loginRes["cookie"]
-	qq := extractCookieValue(cookie, "uin")
-	qq = strings.TrimPrefix(qq, "o")
-	qq = strings.TrimLeft(qq, "0")
+	qq := qqFromCookie(cookie)
 
 	apiLogger, _ := logFact.CreateAPILogger(qq)
+	qunCookie := qunCookieForQQ(qq)
 
 	c := &Client{
 		QQ:        qq,
 		Nickname:  loginRes["nickname"],
 		GTK:       loginRes["g_tk"],
 		Cookie:    cookie,
+		QunCookie: qunCookie,
 		Http:      httpClient,
 		APILogger: apiLogger,
 	}
 
-	// 登录成功，保存 Session
-	_ = SaveSession(&Session{
-		QQ:       c.QQ,
-		Nickname: c.Nickname,
-		GTK:      c.GTK,
-		Cookie:   c.Cookie,
-	})
+	c.persistSession()
 
 	return c, nil
 }
@@ -118,9 +114,59 @@ func NewClientFromSession(sess *Session, httpClient *http.Client, apiLogger *zap
 		Nickname:  sess.Nickname,
 		GTK:       sess.GTK,
 		Cookie:    sess.Cookie,
+		QunCookie: sess.QunCookie,
 		Http:      httpClient,
 		APILogger: apiLogger,
 	}
+}
+
+// HasQunAuth 是否已经有群管理页的 p_skey，能用来拉加入的群。
+func (c *Client) HasQunAuth() bool {
+	return c != nil && extractCookieValue(c.QunCookie, "p_skey") != ""
+}
+
+// ClearQunAuth 丢掉过期的群列表授权，空间登录不受影响。
+func (c *Client) ClearQunAuth() {
+	if c == nil {
+		return
+	}
+	c.QunCookie = ""
+	c.persistSession()
+}
+
+// AuthorizeQun 弹出群管理页二维码。必须用当前空间登录的同一个 QQ。
+func (c *Client) AuthorizeQun(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("尚未登录空间")
+	}
+	res, err := NewLoginHandler(c.Http).LoginQun(ctx)
+	if err != nil {
+		return err
+	}
+	cookie := res["cookie"]
+	qq := qqFromCookie(cookie)
+	if qq != "" && c.QQ != "" && qq != c.QQ {
+		return fmt.Errorf("刚才扫的是 %s，当前空间登录是 %s。请用同一个号再扫一次", qq, c.QQ)
+	}
+	if extractCookieValue(cookie, "p_skey") == "" {
+		return fmt.Errorf("没有拿到群列表凭证，请再扫一次")
+	}
+	c.QunCookie = cookie
+	c.persistSession()
+	return nil
+}
+
+func (c *Client) persistSession() {
+	if c == nil || strings.TrimSpace(c.QQ) == "" {
+		return
+	}
+	_ = SaveSession(&Session{
+		QQ:        c.QQ,
+		Nickname:  c.Nickname,
+		GTK:       c.GTK,
+		Cookie:    c.Cookie,
+		QunCookie: c.QunCookie,
+	})
 }
 
 // logAPI 负责统一记录底层 API 请求的调试信息

@@ -36,6 +36,7 @@ const (
 	TaskModeRetryFailed TaskMode = "retry_failed" // 只下载源任务里还没解决的失败项
 	TaskModeShuoShuo    TaskMode = "shuoshuo"     // 备份说说并生成本地查看页
 	TaskModeBoard       TaskMode = "board"        // 备份留言板并生成本地查看页
+	TaskModeGroupAlbum  TaskMode = "group_album"  // 备份指定群的相册
 )
 
 // TaskStatus 是任务落盘时的最终（或进行中）状态，由 CLI 根据下载结果判定后写入。
@@ -84,6 +85,10 @@ type TaskRecord struct {
 	// 自己备份自己时两者相同，备份好友空间时不同。查找可重试任务按 OperatorUin 过滤。
 	OperatorUin string `json:"operator_uin"`
 	TargetUin   string `json:"target_uin"`
+
+	// GroupID / GroupName 仅群相册任务有值。重试时要靠群号把文件写回 qun/<群号>/。
+	GroupID   string `json:"group_id,omitempty"`
+	GroupName string `json:"group_name,omitempty"`
 
 	// 本次勾选的相册名。空切片表示当时选了「全部相册」。说说/留言板备份分别写「说说」「留言板」。
 	Albums []string `json:"albums,omitempty"`
@@ -144,6 +149,12 @@ func NewRetryTaskRecord(source *TaskRecord, cfg *Config) *TaskRecord {
 
 	record := NewTaskRecord(TaskModeRetryFailed, source.OperatorUin, source.TargetUin, source.Albums, cfg, true)
 	record.SourceTaskID = source.ID
+	record.GroupID = source.GroupID
+	record.GroupName = source.GroupName
+	if record.GroupID == "" && len(source.OpenFailedItems) > 0 {
+		record.GroupID = source.OpenFailedItems[0].GroupID
+		record.GroupName = source.OpenFailedItems[0].GroupName
+	}
 	return record
 }
 
