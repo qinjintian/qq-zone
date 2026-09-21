@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-20
- * @FileName: spider_group_test.go
- */
+// 群相册备份任务识别单元测试
 
 package app
 

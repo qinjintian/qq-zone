@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-20
- * @FileName: session_test.go
- */
+// 登录会话保存与加载单元测试
 
 package qzone
 

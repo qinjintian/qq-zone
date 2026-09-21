@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-02
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 17:10:00
- * @FileName: http.go
- * @Description: [定制化 HTTP 客户端封装，支持带进度的大文件下载、安全续传与通用 GET/POST 请求]
- */
+// 定制化 HTTP 客户端封装，支持带进度的大文件下载、安全续传与通用 GET/POST 请求
 
 package http
 

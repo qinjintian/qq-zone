@@ -1,16 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: mood_like.go
- * @Description: [说说点赞：列表/详情接口不含点赞，需另走 qz_opcnt2 和 get_like_list_app]
- */
+// 说说点赞：列表/详情接口不含点赞，需另走 qz_opcnt2 和 get_like_list_app
 
 package qzone
 

@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-08
- * @FileName: board_parse_test.go
- */
+// 留言板 JSON 单元测试
 
 package app
 

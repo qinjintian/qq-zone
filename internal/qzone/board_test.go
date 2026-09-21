@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-08
- * @FileName: board_test.go
- */
+// 留言板接口解析单元测试
 
 package qzone
 

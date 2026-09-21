@@ -1,16 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-14
- * @FileName: task_record.go
- * @Description: [备份任务记录持久化管理，支持失败项追踪、任务回放与重试链路闭环]
- */
+// 备份任务记录持久化管理，支持失败项追踪、任务回放与重试链路闭环
 
 package app
 

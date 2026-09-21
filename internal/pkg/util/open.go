@@ -1,16 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: open.go
- * @Description: [用系统默认浏览器打开本地文件，供说说查看页双击之外的菜单入口使用]
- */
+// 用系统默认浏览器打开本地文件，供说说查看页双击之外的菜单入口使用
 
 package util
 

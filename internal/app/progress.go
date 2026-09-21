@@ -1,16 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: progress.go
- * @Description: [网络等待时转圈，避免还没拉到进度数据时终端像死机]
- */
+// 网络等待时转圈，避免还没拉到进度数据时终端像死机
 
 package app
 
