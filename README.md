@@ -4,7 +4,7 @@
   <p>
     <a href="https://github.com/qinjintian/qq-zone/releases"><img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="Release"></a>
     <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat-square&logo=go" alt="Go"></a>
-    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License"></a>
+    <a href="https://github.com/qinjintian/qq-zone/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-个人学习-blue?style=flat-square" alt="License"></a>
     <a href="https://github.com/qinjintian/qq-zone/releases/latest"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"></a>
   </p>
 </div>

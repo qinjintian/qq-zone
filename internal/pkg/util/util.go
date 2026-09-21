@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-02
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
- * @FileName: util.go
- * @Description: [项目通用工具函数集，涵盖文件校验、路径检查、字节格式化及随机数生成]
- */
+// 项目通用工具函数集，涵盖文件校验、路径检查、字节格式化及随机数生成
 
 package util
 

@@ -1,12 +1,6 @@
 //go:build windows
 
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: stdin_windows.go
- */
+// Windows 下丢掉控制台里积着的按键
 
 package cli
 

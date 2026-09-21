@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-01
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 09:57:00
- * @FileName: hls.go
- * @Description: [HLS/m3u8 播放链兜底下载，用于 download_url 失效时按网页播放器同样的分片方式拉取视频]
- */
+// HLS/m3u8 播放链兜底下载，用于 download_url 失效时按网页播放器同样的分片方式拉取视频
 
 package http
 

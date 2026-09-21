@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-20
- * @FileName: qzone_login_test.go
- */
+// 群空间扫码登录参数单元测试
 
 package qzone
 

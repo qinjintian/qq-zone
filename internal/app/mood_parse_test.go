@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: mood_parse_test.go
- */
+// 说说 JSON 单元测试
 
 package app
 

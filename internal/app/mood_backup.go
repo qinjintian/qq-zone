@@ -1,16 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: mood_backup.go
- * @Description: [说说备份引擎：分页拉取、评论补全、配图/视频下载、增量合并]
- */
+// 说说备份引擎：分页拉取、评论补全、配图/视频下载、增量合并
 
 package app
 

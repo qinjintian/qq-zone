@@ -1,10 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: friend_test.go
- */
+// 好友备注名解析单元测试
 
 package qzone
 

@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-02
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-04 17:10:00
- * @FileName: spider.go
- * @Description: [QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度]
- */
+// QQ 空间媒体爬虫核心引擎，负责相册下载、失败项记录、断点续传与动态并发调度
 
 package app
 

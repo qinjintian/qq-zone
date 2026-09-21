@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-02
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-07-03 17:30:00
- * @FileName: logger.go
- * @Description: [结构化日志系统工厂实现，支持按账号分流、API 报文审计及 ANSI 码过滤]
- */
+// 结构化日志系统工厂实现，支持按账号分流、API 报文审计及 ANSI 码过滤
 
 package logger
 

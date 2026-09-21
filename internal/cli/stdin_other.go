@@ -1,12 +1,6 @@
 //go:build !windows
 
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-09-07
- * @FileName: stdin_other.go
- */
+// 非 Windows 下非阻塞丢掉 stdin 里积着的按键
 
 package cli
 

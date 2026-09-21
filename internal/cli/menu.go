@@ -1,18 +1,4 @@
-/*
- * Copyright (c) 2026 qinjintian. All rights reserved.
- *
- * No Part of this file may be reproduced, stored
- * in a retrieval system, or transmitted, in any form, or by any means,
- * electronic, mechanical, photocopying, recording, or otherwise,
- * without the prior consent of qinjintian.
- *
- * @Author: qinjintian<514092640@qq.com>
- * @Date: 2026-07-02
- * @LastEditors: qinjintian<514092640@qq.com>
- * @LastEditTime: 2026-09-20 16:20:00
- * @FileName: menu.go
- * @Description: [交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度]
- */
+// 交互式命令行界面实现，包含主菜单导航、相册多选及下载任务调度
 
 package cli
 
