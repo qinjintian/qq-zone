@@ -188,11 +188,55 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 	s.resetVideoDebugLogs()
 	s.logVideoDebugHint()
 
+	// 全局总进度条：以相册数为分母，实时汇总已下载文件数、字节数与速度，置顶展示。
+	var globalBar *mpb.Bar
+	if len(filteredAlbums) > 0 {
+		globalStart := time.Now()
+		globalBar = p.AddBar(int64(len(filteredAlbums)),
+			mpb.BarRemoveOnComplete(),
+			mpb.PrependDecorators(
+				decor.Name("总进度 ", decor.WC{W: 7, C: decor.DindentRight}),
+				decor.CountersNoUnit("%d / %d"),
+			),
+			mpb.AppendDecorators(
+				decor.Percentage(),
+				decor.Name(" | 文件: "),
+				decor.Any(func(st decor.Statistics) string {
+					done := atomic.LoadUint64(&s.results.Success)
+					total := atomic.LoadUint64(&s.results.Total)
+					return strconv.FormatUint(done, 10) + " / " + strconv.FormatUint(total, 10)
+				}, decor.WC{W: 13, C: decor.DindentRight}),
+				decor.Name(" | 已下载: "),
+				decor.Any(func(st decor.Statistics) string {
+					return util.FormatBytes(int64(atomic.LoadUint64(&s.results.BytesDone)))
+				}, decor.WC{W: 12, C: decor.DindentRight}),
+				decor.Name(" | 速度: "),
+				decor.Any(func(st decor.Statistics) string {
+					b := atomic.LoadUint64(&s.results.BytesDone)
+					elapsed := time.Since(globalStart).Seconds()
+					if elapsed < 0.1 || b == 0 {
+						return "0 B/s"
+					}
+					return util.FormatBytes(int64(float64(b)/elapsed)) + "/s"
+				}, decor.WC{W: 15, C: decor.DindentRight}),
+				decor.Any(func(st decor.Statistics) string {
+					if n := atomic.LoadUint64(&s.results.Failed); n > 0 {
+						return fmt.Sprintf(" 失败 %d", n)
+					}
+					return ""
+				}, decor.WC{W: 9, C: decor.DindentRight}),
+			),
+		)
+	}
+
 	// 相册必须一个下完再下下一个，避免同时打太多相册列表接口触发风控。
 	for i, album := range filteredAlbums {
 		select {
 		case <-ctx.Done():
 			s.logger.Warn("任务已被用户取消")
+			if globalBar != nil {
+				globalBar.Abort(true)
+			}
 			p.Wait()
 			s.flushVideoDebugLogs()
 			s.flushTaskVideoSummary()
@@ -202,6 +246,9 @@ func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (
 
 		if err := s.downloadAlbum(ctx, p, targetUin, album, i+1, len(filteredAlbums), exclude); err != nil {
 			s.logger.Errorf("failed to download album [%s]: %v", album.Get("name").String(), err)
+		}
+		if globalBar != nil {
+			globalBar.Increment()
 		}
 	}
 
@@ -233,7 +280,10 @@ func (s *Spider) RetryFailed(ctx context.Context, targetUin string, failedItems 
 		mpb.AppendDecorators(
 			decor.Percentage(),
 			decor.Name(" ] "),
-			decor.OnComplete(decor.Name("", decor.WC{W: 5}), "Done!"),
+			decor.OnCompleteMeta(
+				decor.OnComplete(decor.Name("", decor.WC{W: 4}), "完成"),
+				func(s string) string { return color.New(color.FgGreen).Sprint(s) },
+			),
 		),
 	)
 
@@ -329,6 +379,7 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 	if albumTotal > 0 {
 		albumLabel = fmt.Sprintf("Album [%s] (%d/%d) ", albumName, albumIdx, albumTotal)
 	}
+	failedAtStart := atomic.LoadUint64(&s.results.Failed)
 	albumBar := p.AddBar(int64(len(photos)),
 		mpb.BarRemoveOnComplete(),
 		mpb.PrependDecorators(
@@ -338,7 +389,16 @@ func (s *Spider) downloadAlbum(ctx context.Context, p *mpb.Progress, targetUin s
 		mpb.AppendDecorators(
 			decor.Percentage(),
 			decor.Name(" ] "),
-			decor.OnComplete(decor.Name("", decor.WC{W: 5}), "Done!"),
+			decor.Any(func(st decor.Statistics) string {
+				if n := atomic.LoadUint64(&s.results.Failed) - failedAtStart; n > 0 {
+					return fmt.Sprintf(" 失败 %d", n)
+				}
+				return ""
+			}, decor.WC{W: 9, C: decor.DindentRight}),
+			decor.OnCompleteMeta(
+				decor.OnComplete(decor.Name("", decor.WC{W: 4}), "完成"),
+				func(s string) string { return color.New(color.FgGreen).Sprint(s) },
+			),
 		),
 	)
 

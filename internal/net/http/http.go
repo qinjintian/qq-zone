@@ -428,6 +428,8 @@ func (c *Client) Download(ctx context.Context, uri string, target string, header
 					decor.CountersKibiByte("% .2f / % .2f"),
 				),
 				mpb.AppendDecorators(
+					decor.Name(" | "),
+					decor.Percentage(),
 					decor.Name(" | 剩余: "),
 					decor.Any(func(st decor.Statistics) string {
 						if st.Completed || st.Total <= 0 {
