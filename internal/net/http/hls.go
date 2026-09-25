@@ -124,6 +124,12 @@ func (c *Client) downloadHLS(ctx context.Context, playlistURL, target string, he
 				decor.CountersNoUnit("%d / %d"),
 			),
 			mpb.AppendDecorators(
+				decor.Name(" | "),
+				decor.Percentage(),
+				decor.Name(" | 已下载: "),
+				decor.Any(func(st decor.Statistics) string {
+					return util.FormatBytes(copied)
+				}, decor.WC{W: 12, C: decor.DindentRight}),
 				decor.Name(" | 速度: "),
 				decor.Any(func(st decor.Statistics) string {
 					if st.Completed && lastSpeed != "" {
