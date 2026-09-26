@@ -443,7 +443,7 @@ func (c *CLI) handleSpider(ctx context.Context, targetUin string) {
 	spider := app.NewSpider(c.client, c.config, finalAlbums, taskLogger)
 
 	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在下载 ━━━━━━━━━━━━━━━━━━━━━━"))
-	results, runErr := spider.Download(ctx, targetUin, exclude)
+	results, runErr := spider.Download(ctx, targetUin, allAlbums, exclude)
 	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
 
 	status := c.determineTaskStatus(ctx, results, runErr)

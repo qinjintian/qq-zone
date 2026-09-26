@@ -186,7 +186,7 @@ func (c *CLI) backupOneGroup(ctx context.Context, group qzone.Group) int {
 	spider := app.NewGroupSpider(c.client, c.config, finalAlbums, group.ID, group.DisplayName(), taskLogger)
 
 	fmt.Println(color.HiBlackString("\n━━━━━━━━━━━━━━━━━━━━━━ 正在下载群相册 ━━━━━━━━━━━━━━━━━━━━━━"))
-	results, runErr := spider.Download(ctx, c.client.QQ, exclude)
+	results, runErr := spider.Download(ctx, c.client.QQ, allAlbums, exclude)
 	fmt.Println(color.HiBlackString("━━━━━━━━━━━━━━━━━━━━━━ 下载完成 ━━━━━━━━━━━━━━━━━━━━━━"))
 
 	status := c.determineTaskStatus(ctx, results, runErr)

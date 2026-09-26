@@ -136,37 +136,11 @@ func (s *Spider) isGroupMode() bool {
 }
 
 // Download 开始执行批量相册下载任务。相册串行处理，单个相册内部再并发下文件。
-func (s *Spider) Download(ctx context.Context, targetUin string, exclude bool) (*DownloadResult, error) {
+// albums 由调用方在进入下载前拉取并勾选好，这里不再重复请求相册列表。
+func (s *Spider) Download(ctx context.Context, targetUin string, albums []gjson.Result, exclude bool) (*DownloadResult, error) {
 	s.results = DownloadResult{}
 
 	p := mpb.NewWithContext(ctx)
-	waitName := "正在拉取相册列表"
-	if s.isGroupMode() {
-		waitName = "正在拉取群相册列表"
-	}
-	wait := waitSpinner(p, waitName)
-	var (
-		albums []gjson.Result
-		err    error
-	)
-	if s.isGroupMode() {
-		albums, err = s.client.GetGroupAlbumList(ctx, s.groupID)
-	} else {
-		albums, err = s.client.GetAlbumList(ctx, targetUin)
-	}
-	stopWaitSpinner(wait)
-	if err != nil {
-		p.Wait()
-		return nil, err
-	}
-
-	if len(albums) == 0 {
-		if s.isGroupMode() {
-			s.logger.Warnf("未发现群相册，请确认群号 [%s] 是否正确、你是否仍在群内", s.groupID)
-		} else {
-			s.logger.Warnf("未发现任何相册，请确认账号 [%s] 空间是否开放或登录是否失效", targetUin)
-		}
-	}
 
 	// 丢掉无权访问的，以及用户没勾选的相册。
 	filteredAlbums := make([]gjson.Result, 0)
