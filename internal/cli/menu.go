@@ -163,7 +163,7 @@ func (c *CLI) Menu(ctx context.Context) {
 				case 11:
 					return "浏览历史失败任务列表，手动选择要重试的任务，仅重试尚未成功的文件"
 				case 12:
-					return "自动扫描并列出所有允许您访问空间的好友及其相册概况"
+					return "较大概率触发风控，短时间相册列表可能为空，请谨慎操作"
 				case 13:
 					status := "关闭"
 					if c.logFact.IsDebug() {
