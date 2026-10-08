@@ -441,6 +441,44 @@ html[data-kind="board"] .comment .c-time {
 .lb-nav.prev { left: 12px; }
 .lb-nav.next { right: 12px; }
 
+.day-head {
+  margin: 6px 2px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.feed-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  border-radius: 999px;
+  vertical-align: 1px;
+  background: #e8f7ee;
+  color: #0d9a52;
+}
+.feed-pill.t-blog { background: #e8f1ff; color: #1d4e89; }
+.feed-pill.t-photo { background: #fff1e6; color: #b85c00; }
+.feed-pill.t-share,
+.feed-pill.t-repost { background: #f3e8ff; color: #7c3aed; }
+.feed-pill.t-other,
+.feed-pill.t-vote { background: #eef1f4; color: #5c6570; }
+.feed-title {
+  margin-top: 10px;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+html[data-theme="dark"] .feed-pill { background: #163524; color: #7ddea8; }
+html[data-theme="dark"] .feed-pill.t-blog { background: #1a2c44; color: #9ec1ff; }
+html[data-theme="dark"] .feed-pill.t-photo { background: #3a2a18; color: #ffc48a; }
+html[data-theme="dark"] .feed-pill.t-share,
+html[data-theme="dark"] .feed-pill.t-repost { background: #3b2a55; color: #d8b4fe; }
+html[data-theme="dark"] .feed-pill.t-other,
+html[data-theme="dark"] .feed-pill.t-vote { background: #2a2d31; color: #c4c7ce; }
+
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; padding: 16px 12px 48px; }
   .years {

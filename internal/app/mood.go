@@ -72,6 +72,15 @@ type MoodPost struct {
 	Location     string        `json:"location,omitempty"`       // 定位地名
 	ShareTitle   string        `json:"share_title,omitempty"`    // 分享卡片标题
 	ShareURL     string        `json:"share_url,omitempty"`      // 分享链接
+	FeedType     string        `json:"feed_type,omitempty"`      // 个人中心动态类型：shuoshuo / blog / photo / share / repost
+	FeedLabel    string        `json:"feed_label,omitempty"`     // 查看页上的类型名：说说、日志、相册、分享、转发
+	Action       string        `json:"action,omitempty"`         // 动态动作，如「发表说说」「写了日志」
+	Title        string        `json:"title,omitempty"`          // 日志或分享标题
+	BlogID       string        `json:"blog_id,omitempty"`        // 日志 id，用来补拉全文
+	OriginTID    string        `json:"origin_tid,omitempty"`     // 说说 tid，用来补评论和点赞；和动态自己的 tid 不是同一个
+	Unikey       string        `json:"unikey,omitempty"`         // 点赞接口用的资源键
+	CommentKnown bool          `json:"-"`                        // 卡片上是否已经给出评论数；没有的话要再去拉
+	LikeKnown    bool          `json:"-"`                        // 卡片上是否已经给出赞数
 	Media        []MoodMedia   `json:"media,omitempty"`          // 正文配图/视频/语音
 	Repost       *MoodRepost   `json:"repost,omitempty"`         // 转发的原说说，原创则为空
 	Likes        []MoodPerson  `json:"likes,omitempty"`          // 点赞人名单，来自 get_like_list_app 的 like_uin_info

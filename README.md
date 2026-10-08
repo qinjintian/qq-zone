@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>QQ 空间备份（相册原图 / 原视频 / 群相册 / 说说 / 留言板）</h1>
+  <h1>QQ 空间备份（相册原图 / 原视频 / 群相册 / 说说 / 留言板 / 个人中心动态）</h1>
   <p><strong>扫码登录，一键备份到本地。</strong> 个人相册和群相册下原图和原视频；说说和留言板连同配图一起保存，并生成可双击打开的网页。</p>
   <p>
     <a href="https://github.com/qinjintian/qq-zone/releases"><img src="https://img.shields.io/github/v/release/qinjintian/qq-zone?color=blue&include_prereleases&style=flat-square" alt="Release"></a>
@@ -105,10 +105,11 @@ QQ 空间里堆着很多人的照片、视频、说说和留言，群里也常�
    - **下载群相册**：先选群，再勾选该群相册。也可以手输群号。
    - **备份自己的说说**：下载说说、配图、视频和评论，并生成本地时间线网页。
    - **备份自己的留言板**：下载留言、回复、配图和主人寄语，并生成本地查看页。
+   - **备份个人中心动态**：先保存个人中心最新 5 页好友动态（头像、备注、正文、图片视频、时间、赞和评论），写好查看页后再问要不要继续往前翻。
    - **下载好友的相册**：输入好友 QQ，备份其公开或对你开放的相册。
    - **备份好友的说说**：备份好友空间里对你可见的说说。
    - **备份好友的留言板**：备份好友空间里对你可见的留言。
-   - **查看说说备份** / **查看留言板备份**：用浏览器打开已经生成的 `index.html`，不必重新登录。
+   - **查看说说备份** / **查看留言板备份** / **查看动态备份**：用浏览器打开已经生成的 `index.html`，不必重新登录。
    - **重试上次失败项**：从历史任务里挑一次记录，只补还没成功的文件。
    - **查看对我开放的好友**：看哪些好友空间你能进、有哪些公开相册。
    - **切换账号 / 重新登录**：换一个已保存的号，或再扫一次码。
@@ -119,6 +120,7 @@ QQ 空间里堆着很多人的照片、视频、说说和留言，群里也常�
    - 群相册在 `storage/qzone/<QQ号>/qun/<群号>/`
    - 说说查看页在 `storage/qzone/<QQ号>/shuoshuo/index.html`，可直接双击打开
    - 留言板查看页在 `storage/qzone/<QQ号>/liuyanban/index.html`，可直接双击打开
+   - 个人中心动态查看页在 `storage/qzone/<QQ号>/dongtai/index.html`，可直接双击打开
    - 任务记录在 `storage/tasks/`
    中途想停按一次 `Ctrl+C`，等当前文件收尾即可。
 
@@ -138,11 +140,18 @@ storage/
     │   ├── media/               # 说说配图、视频、语音
     │   ├── data/                # backup.json 和按年拆开的页面数据
     │   └── raw/                 # 可选：接口原始 JSON
-    └── liuyanban/
+    ├── liuyanban/
         ├── index.html           # 双击打开留言板查看页
         ├── assets/
         ├── avatars/
         ├── media/               # 留言和回复里的配图
+        ├── data/
+        └── raw/                 # 可选：接口原始 JSON
+    └── dongtai/
+        ├── index.html           # 双击打开个人中心动态
+        ├── assets/
+        ├── avatars/             # 好友头像
+        ├── media/               # 动态配图和视频
         ├── data/
         └── raw/                 # 可选：接口原始 JSON
 ```
@@ -188,8 +197,11 @@ storage/
 **这是腾讯官方工具吗？**  
 不是。这是个人开源项目，未与腾讯关联。请只备份你有权访问的内容。遇到问题欢迎到 Issues 反馈。
 
+**个人中心动态为什么不是一次下完？**  
+浏览器上打开个人中心，往下拉会继续加载更早的动态，条数很多。程序默认先保存最新 5 页（大约 50 条），写好 `index.html` 后再问要不要继续。选「再下载 5 页」或「一直往前下载」即可。已经备份过的会跳过，下次会从更早的位置接着收。这里只有网页上还能加载出来的动态，不是每一位好友的完整历史。
+
 **文件保存在哪？**  
-相册：`storage/qzone/<QQ号>/album/`。群相册：`storage/qzone/<QQ号>/qun/<群号>/`。说说：`storage/qzone/<QQ号>/shuoshuo/`。留言板：`storage/qzone/<QQ号>/liuyanban/`（其中 `index.html` 是查看页）。任务记录在 `storage/tasks/`。
+相册：`storage/qzone/<QQ号>/album/`。群相册：`storage/qzone/<QQ号>/qun/<群号>/`。说说：`storage/qzone/<QQ号>/shuoshuo/`。留言板：`storage/qzone/<QQ号>/liuyanban/`。个人中心动态：`storage/qzone/<QQ号>/dongtai/`（其中 `index.html` 是查看页）。任务记录在 `storage/tasks/`。
 
 ---
 
