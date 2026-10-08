@@ -61,6 +61,7 @@ func applyLooseFeed(body string, page *FeedPage) {
 	page.HTML = normalizeFeedHTML(strings.Join(htmls, "\n"))
 }
 
+// looseDataObject 截出响应里 "data": 后面的那一段 JS 对象。它不是合法 JSON，不能直接交给解析库。
 func looseDataObject(body string) string {
 	idx := strings.Index(body, `"data"`)
 	if idx < 0 {
@@ -73,6 +74,7 @@ func looseDataObject(body string) string {
 	return matchJSValue(rest)
 }
 
+// isUnixSeconds 判断字符串是不是 10 到 13 位的数字时间戳。
 func isUnixSeconds(s string) bool {
 	s = strings.TrimSpace(s)
 	if len(s) < 10 || len(s) > 13 {
@@ -86,6 +88,7 @@ func isUnixSeconds(s string) bool {
 	return true
 }
 
+// matchJSValue 取出当前位置这一整个 JS 值，对象和数组会配平到结束括号。
 func matchJSValue(s string) string {
 	if s == "" {
 		return ""
@@ -97,6 +100,7 @@ func matchJSValue(s string) string {
 	return s[:end]
 }
 
+// walkJSValue 返回当前 JS 值结束后的下标。字符串里的括号不参与配平。
 func walkJSValue(s string, i int) int {
 	if i >= len(s) {
 		return -1
@@ -142,6 +146,7 @@ func walkJSValue(s string, i int) int {
 	}
 }
 
+// iterJSKeys 遍历 JS 对象里的键值，并继续进入内层对象和数组。
 func iterJSKeys(src string, on func(key, value string)) {
 	if on == nil || src == "" {
 		return
@@ -197,6 +202,7 @@ func iterJSKeys(src string, on func(key, value string)) {
 	}
 }
 
+// consumeJSString 读取一个单引号或双引号字符串，并还原 \x3C 这类转义。
 func consumeJSString(s string, i int) (string, int) {
 	if i >= len(s) {
 		return "", -1
@@ -219,6 +225,7 @@ func consumeJSString(s string, i int) (string, int) {
 	return b.String(), -1
 }
 
+// appendJSEscape 把一个 JS 转义序列写入结果，并返回转义结束后的下标。
 func appendJSEscape(b *strings.Builder, s string, i int) int {
 	if i >= len(s) {
 		return i
@@ -260,6 +267,7 @@ func appendJSEscape(b *strings.Builder, s string, i int) int {
 	return i + 1
 }
 
+// hexByte 把两个十六进制字符合成一个字节，用于还原 \xHH。
 func hexByte(a, b byte) (byte, bool) {
 	hi, ok1 := hexVal(a)
 	lo, ok2 := hexVal(b)
@@ -269,6 +277,7 @@ func hexByte(a, b byte) (byte, bool) {
 	return hi<<4 | lo, true
 }
 
+// hexRune 把四位十六进制收成一个字符，用于还原 \uHHHH。
 func hexRune(s string) (rune, bool) {
 	if len(s) != 4 {
 		return 0, false
@@ -284,6 +293,7 @@ func hexRune(s string) (rune, bool) {
 	return v, true
 }
 
+// hexVal 把一个十六进制字符换成 0 到 15 的数值。
 func hexVal(c byte) (byte, bool) {
 	switch {
 	case c >= '0' && c <= '9':
@@ -297,14 +307,17 @@ func hexVal(c byte) (byte, bool) {
 	}
 }
 
+// isIdentStart 判断字符能不能作为 JS 标识符的开头。
 func isIdentStart(c byte) bool {
 	return c == '_' || c == '$' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
+// isIdentCont 判断字符能不能出现在 JS 标识符的后续位置。
 func isIdentCont(c byte) bool {
 	return isIdentStart(c) || (c >= '0' && c <= '9')
 }
 
+// skipSpace 跳过空白，返回下一个非空白字符的下标。
 func skipSpace(s string, i int) int {
 	for i < len(s) {
 		switch s[i] {

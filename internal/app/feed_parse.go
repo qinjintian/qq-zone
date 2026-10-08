@@ -57,6 +57,7 @@ func postsFromFeedPage(pageHTML string, items []gjson.Result, now time.Time) []M
 	return posts
 }
 
+// parseFeedHTML 从一页 HTML 里取出好友动态卡片。广告卡片在这里就丢掉。
 func parseFeedHTML(fragment string, now time.Time) []MoodPost {
 	fragment = strings.TrimSpace(fragment)
 	if fragment == "" {
@@ -96,6 +97,7 @@ func parseFeedHTML(fragment string, now time.Time) []MoodPost {
 	return posts
 }
 
+// parseFeedCard 把一张动态卡片收成帖子，包含作者、正文、时间、赞评和配图。
 func parseFeedCard(card *xhtml.Node, now time.Time) (MoodPost, bool) {
 	appid := strings.TrimSpace(attr(card, "data-appid"))
 	uin := strings.TrimSpace(attr(card, "data-uin"))
@@ -234,6 +236,7 @@ func parseFeedCard(card *xhtml.Node, now time.Time) (MoodPost, bool) {
 	return post, true
 }
 
+// fillFeedCardMeta 从卡片内部补齐编号、作者、应用类型和发表时间。这些值经常不在最外层标签上。
 func fillFeedCardMeta(card *xhtml.Node, appid, uin, tid, key, abstime *string) {
 	if card == nil {
 		return
@@ -268,6 +271,7 @@ func fillFeedCardMeta(card *xhtml.Node, appid, uin, tid, key, abstime *string) {
 	}
 }
 
+// findFeedAttr 在当前卡片里查找属性，不进入转发原文和评论区，避免拿到别人的编号。
 func findFeedAttr(card *xhtml.Node, keys ...string) string {
 	var found string
 	var walk func(*xhtml.Node, bool)
@@ -294,6 +298,7 @@ func findFeedAttr(card *xhtml.Node, keys ...string) string {
 	return found
 }
 
+// splitFeedDOMID 从 fct_QQ_应用_类型_时间 这类节点 id 里取出作者、应用类型和发表时间。
 func splitFeedDOMID(id string) (uin, appid, abstime string) {
 	parts := strings.Split(strings.TrimSpace(id), "_")
 	if len(parts) < 5 {
@@ -316,12 +321,14 @@ func splitFeedDOMID(id string) (uin, appid, abstime string) {
 	return parts[1], parts[2], parts[4]
 }
 
+// isFeedCommentBox 判断节点是不是评论区，避免把评论者当成动态作者。
 func isFeedCommentBox(n *xhtml.Node) bool {
 	return hasClass(n, "comments-list") || hasClass(n, "mod-comments") || hasClass(n, "f-comments") ||
 		hasClass(n, "comment-list") || hasClass(n, "comments-item") || hasClass(n, "comment-item") ||
 		hasClass(n, "f-comment")
 }
 
+// parseFeedHTMLComments 读取卡片里已经渲染出来的评论。个人中心多数时候只有输入框，评论要另外请求。
 func parseFeedHTMLComments(card, skip *xhtml.Node) []MoodComment {
 	if card == nil {
 		return nil
@@ -353,6 +360,7 @@ func parseFeedHTMLComments(card, skip *xhtml.Node) []MoodComment {
 	return out
 }
 
+// parseFeedHTMLComment 把一条评论节点收成作者、正文、时间和配图。
 func parseFeedHTMLComment(n *xhtml.Node) MoodComment {
 	name := cleanText(textOfClass(n, "nickname", "c-name", "f-name"))
 	uin := strings.TrimSpace(attr(n, "data-uin"))
@@ -441,6 +449,7 @@ func adaptFeedComments(list []gjson.Result) []MoodComment {
 	return out
 }
 
+// attrNonNeg 读取第一个不小于 0 的数字属性，用来取赞数和评论数。
 func attrNonNeg(n *xhtml.Node, keys ...string) (int, bool) {
 	for _, key := range keys {
 		v := strings.TrimSpace(attr(n, key))
@@ -455,6 +464,7 @@ func attrNonNeg(n *xhtml.Node, keys ...string) (int, bool) {
 	return 0, false
 }
 
+// parseFeedRepost 解析卡片里转发的原文。没有作者也没有正文时返回空。
 func parseFeedRepost(n *xhtml.Node, now time.Time) *MoodRepost {
 	name := cleanText(textOfClass(n, "f-name"))
 	uin := strings.TrimSpace(attr(n, "data-uin"))
@@ -489,6 +499,7 @@ func parseFeedRepost(n *xhtml.Node, now time.Time) *MoodRepost {
 	}
 }
 
+// parseFeedJSONItem 把结构化动态条目收成帖子。广告条目直接跳过。
 func parseFeedJSONItem(item gjson.Result, now time.Time) (MoodPost, bool) {
 	if !item.Exists() {
 		return MoodPost{}, false
@@ -566,6 +577,7 @@ func applyBlogDetail(post *MoodPost, title, rawHTML string) {
 	}
 }
 
+// parseRichFragment 从日志正文 HTML 里取出纯文本和图片。
 func parseRichFragment(fragment string) (string, []MoodMedia) {
 	fragment = strings.TrimSpace(fragment)
 	if fragment == "" {
@@ -594,6 +606,7 @@ func parseRichFragment(fragment string) (string, []MoodMedia) {
 	return text, feedImages(article, nil)
 }
 
+// mergeFeedMedia 把日志正文里的图片接到卡片已有图片后面，相同地址只留一份。
 func mergeFeedMedia(base, extra []MoodMedia) []MoodMedia {
 	seen := map[string]bool{}
 	for _, m := range base {
@@ -614,6 +627,7 @@ func mergeFeedMedia(base, extra []MoodMedia) []MoodMedia {
 	return out
 }
 
+// isFeedAdCard 判断这张卡片是不是个人中心广告，例如带推广样式或广告应用号。
 func isFeedAdCard(card *xhtml.Node) bool {
 	if card == nil {
 		return false
@@ -625,6 +639,7 @@ func isFeedAdCard(card *xhtml.Node) bool {
 	return isFeedAdvertisement(appid, attr(card, "data-tid"), firstAttr(card, "data-key", "data-feedkey"), attr(card, "id"))
 }
 
+// isFeedAdvertisement 根据应用号 6600，或编号里带有 advertisement，判断是不是广告。
 func isFeedAdvertisement(appid, tid, key, id string) bool {
 	if strings.TrimSpace(appid) == "6600" {
 		return true
@@ -633,10 +648,12 @@ func isFeedAdvertisement(appid, tid, key, id string) bool {
 	return strings.Contains(blob, "advertisement")
 }
 
+// isSavedFeedAd 判断已经写入备份的一条是不是广告，方便下次备份时清掉。
 func isSavedFeedAd(post MoodPost) bool {
 	return isFeedAdvertisement("", post.OriginTID, post.TID, "")
 }
 
+// withoutFeedAds 从已保存动态里去掉广告，下次写查看页时就不再出现。
 func withoutFeedAds(posts []MoodPost) []MoodPost {
 	if len(posts) == 0 {
 		return posts
@@ -651,6 +668,7 @@ func withoutFeedAds(posts []MoodPost) []MoodPost {
 	return out
 }
 
+// classifyFeed 按应用号和操作文案区分说说、日志、相册、分享和转发。
 func classifyFeed(appid, action string, blog bool) (string, string) {
 	a := strings.TrimSpace(action)
 	switch {
@@ -674,6 +692,7 @@ func classifyFeed(appid, action string, blog bool) (string, string) {
 	}
 }
 
+// feedStableID 给没有固定编号的动态生成稳定 id，增量备份才能认出同一条。
 func feedStableID(appid, uin, tid, key, name, content, title, abstime string) string {
 	key = strings.TrimSpace(key)
 	if key != "" {
@@ -695,6 +714,7 @@ func feedStableID(appid, uin, tid, key, name, content, title, abstime string) st
 	return "feed_" + sum
 }
 
+// parseFeedClock 把接口时间戳或「昨天 12:30」「3月2日」收成秒级时间。
 func parseFeedClock(abstime, text string, now time.Time) int64 {
 	if n := unixSeconds(abstime); n > 0 {
 		return n
@@ -739,6 +759,7 @@ func parseFeedClock(abstime, text string, now time.Time) int64 {
 	return 0
 }
 
+// formatFeedTime 把秒级时间格式化成查看页上的日期时间。
 func formatFeedTime(ts int64) string {
 	if ts <= 0 {
 		return ""
@@ -746,6 +767,7 @@ func formatFeedTime(ts int64) string {
 	return time.Unix(ts, 0).In(shanghaiLoc).Format("2006-01-02 15:04")
 }
 
+// unixSeconds 把秒或毫秒时间戳收成秒。不像时间戳的数字返回 0。
 func unixSeconds(s string) int64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -764,6 +786,7 @@ func unixSeconds(s string) int64 {
 	return n
 }
 
+// clockOf 从文字里取出时和分。没有钟点时返回 0 点 0 分。
 func clockOf(text string) (int, int) {
 	m := feedClockPattern.FindStringSubmatch(text)
 	if len(m) != 3 {
@@ -774,6 +797,7 @@ func clockOf(text string) (int, int) {
 	return h, min
 }
 
+// feedImages 收集卡片里的图片和视频，跳过头像、操作栏和指定区域内的节点。
 func feedImages(root, skip *xhtml.Node) []MoodMedia {
 	if root == nil {
 		return nil
@@ -810,6 +834,7 @@ func feedImages(root, skip *xhtml.Node) []MoodMedia {
 	return out
 }
 
+// mediaFromVideoAttrs 从视频节点的 data-v_* 属性取出播放地址和封面。
 func mediaFromVideoAttrs(n *xhtml.Node) (MoodMedia, bool) {
 	play := strings.TrimSpace(firstAttr(n, "data-v_h265", "data-v_vidiourl"))
 	if !strings.Contains(play, "://") {
@@ -834,6 +859,7 @@ func mediaFromVideoAttrs(n *xhtml.Node) (MoodMedia, bool) {
 	return media, true
 }
 
+// mediaFromNode 从图片或视频节点收集下载地址。图片按原图、大高清图、小图排列。
 func mediaFromNode(n *xhtml.Node, extras ...string) (MoodMedia, bool) {
 	origin := firstAttr(n, "data-originurl", "data-origin", "data-fullsrc", "data-img", "data-src")
 	src := attr(n, "src")
@@ -943,6 +969,7 @@ func prepareFeedPhotoURL(s string) string {
 	return strings.Replace(s, keep, "b&bo=", 1)
 }
 
+// compactFeedPhotoURLs 去掉空值和重复图片地址，并保留大图规格，不把大图改成原图。
 func compactFeedPhotoURLs(urls ...string) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -957,6 +984,7 @@ func compactFeedPhotoURLs(urls ...string) []string {
 	return out
 }
 
+// dropFeedThumbSce 去掉列表小图上的尺寸限制，避免原图和大图仍被压成缩略图。
 func dropFeedThumbSce(u string) string {
 	u = strings.ReplaceAll(u, "&sce=60-2-2", "")
 	u = strings.ReplaceAll(u, "&sce=60-3-3", "")
@@ -977,6 +1005,7 @@ func upgradeFeedImages(posts []MoodPost) bool {
 	return changed
 }
 
+// upgradeFeedMedia 把一份媒体的首选地址改成更清晰的图，并清空旧文件路径以便重新下载。
 func upgradeFeedMedia(list []MoodMedia) bool {
 	changed := false
 	for i := range list {
@@ -995,6 +1024,7 @@ func upgradeFeedMedia(list []MoodMedia) bool {
 	return changed
 }
 
+// filterFeedMediaURLs 只保留可以下载的图片或视频地址。
 func filterFeedMediaURLs(urls []string) []string {
 	var out []string
 	for _, u := range urls {
@@ -1005,6 +1035,7 @@ func filterFeedMediaURLs(urls []string) []string {
 	return out
 }
 
+// isFeedImageURL 判断地址是不是动态配图。表情、头像和空白图不算。
 func isFeedImageURL(s string) bool {
 	l := strings.ToLower(strings.TrimSpace(s))
 	if l == "" || strings.HasPrefix(l, "javascript:") || strings.HasPrefix(l, "data:") {
@@ -1022,11 +1053,13 @@ func isFeedImageURL(s string) bool {
 	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
 }
 
+// looksLikeVideo 根据地址判断是不是视频文件。
 func looksLikeVideo(s string) bool {
 	l := strings.ToLower(s)
 	return strings.Contains(l, ".mp4") || strings.Contains(l, ".m3u8") || strings.Contains(l, "video.qpic.cn")
 }
 
+// findContentRoot 找到卡片里真正放正文的节点。说说正文可能在文本框，也可能在信息区。
 func findContentRoot(card *xhtml.Node) *xhtml.Node {
 	inRepost := func(el *xhtml.Node) bool {
 		return inside(el, card, func(p *xhtml.Node) bool {
@@ -1048,6 +1081,7 @@ func findContentRoot(card *xhtml.Node) *xhtml.Node {
 	return card
 }
 
+// shareFromCard 取出分享卡片的标题和链接。
 func shareFromCard(card *xhtml.Node) (string, string) {
 	box := findFirst(card, func(n *xhtml.Node) bool {
 		return hasClass(n, "f-share") || hasClass(n, "share-box") || hasClass(n, "f-ct-share")
@@ -1070,6 +1104,7 @@ func shareFromCard(card *xhtml.Node) (string, string) {
 	return title, href
 }
 
+// blogIDFromNode 从节点属性或链接里找出日志编号。
 func blogIDFromNode(n *xhtml.Node) string {
 	if id := strings.TrimSpace(attr(n, "data-blogid")); id != "" {
 		return id
@@ -1081,6 +1116,7 @@ func blogIDFromNode(n *xhtml.Node) string {
 	return ""
 }
 
+// nodeHrefBlob 拼出节点及其子节点上的链接，方便从中提取编号。
 func nodeHrefBlob(n *xhtml.Node) string {
 	var b strings.Builder
 	var walk func(*xhtml.Node)
@@ -1102,6 +1138,7 @@ func nodeHrefBlob(n *xhtml.Node) string {
 	return b.String()
 }
 
+// firstUIN 从空间链接里取出第一个 QQ 号。
 func firstUIN(s string) string {
 	m := feedUINPattern.FindStringSubmatch(s)
 	if len(m) == 2 {
@@ -1110,6 +1147,7 @@ func firstUIN(s string) string {
 	return ""
 }
 
+// textOfClass 读取第一个匹配样式节点里的文字，找不到时返回空。
 func textOfClass(root *xhtml.Node, classes ...string) string {
 	n := findFirst(root, func(el *xhtml.Node) bool {
 		if el.Type != xhtml.ElementNode {
@@ -1128,6 +1166,7 @@ func textOfClass(root *xhtml.Node, classes ...string) string {
 	return nodeText(n, nil)
 }
 
+// nodeText 读取节点文字。skip 返回真的子树会被跳过，用来避开昵称、时间和操作栏。
 func nodeText(n *xhtml.Node, skip func(*xhtml.Node) bool) string {
 	if n == nil {
 		return ""
@@ -1171,10 +1210,12 @@ func nodeText(n *xhtml.Node, skip func(*xhtml.Node) bool) string {
 	return b.String()
 }
 
+// skipFeedChrome 判断节点是昵称、来源或操作栏，不属于正文。
 func skipFeedChrome(n *xhtml.Node) bool {
 	return hasClass(n, "f-nick") || hasClass(n, "f-info") || hasClass(n, "f-op") || hasClass(n, "f-op-wrap") || hasClass(n, "f-aside")
 }
 
+// findFirst 按深度优先返回第一个符合条件的子节点。
 func findFirst(root *xhtml.Node, pred func(*xhtml.Node) bool) *xhtml.Node {
 	if root == nil {
 		return nil
@@ -1200,6 +1241,7 @@ func findFirst(root *xhtml.Node, pred func(*xhtml.Node) bool) *xhtml.Node {
 	return found
 }
 
+// inside 判断从当前节点往上、到达 stop 之前，有没有符合条件的祖先。
 func inside(n, stop *xhtml.Node, pred func(*xhtml.Node) bool) bool {
 	for p := n; p != nil && p != stop; p = p.Parent {
 		if pred(p) {
@@ -1209,6 +1251,7 @@ func inside(n, stop *xhtml.Node, pred func(*xhtml.Node) bool) bool {
 	return false
 }
 
+// hasClass 判断节点的 class 是否包含给定类名，按整词匹配。
 func hasClass(n *xhtml.Node, class string) bool {
 	if n == nil || n.Type != xhtml.ElementNode || class == "" {
 		return false
@@ -1221,6 +1264,7 @@ func hasClass(n *xhtml.Node, class string) bool {
 	return false
 }
 
+// attr 读取节点上的一个属性，没有时返回空。
 func attr(n *xhtml.Node, key string) string {
 	if n == nil {
 		return ""
@@ -1233,6 +1277,7 @@ func attr(n *xhtml.Node, key string) string {
 	return ""
 }
 
+// firstAttr 按给定顺序返回第一个非空属性。
 func firstAttr(n *xhtml.Node, keys ...string) string {
 	for _, key := range keys {
 		if v := strings.TrimSpace(attr(n, key)); v != "" {
@@ -1242,6 +1287,7 @@ func firstAttr(n *xhtml.Node, keys ...string) string {
 	return ""
 }
 
+// cleanText 收掉多余空白，保留正文里的换行。
 func cleanText(s string) string {
 	s = strings.ReplaceAll(s, "\u00a0", " ")
 	lines := strings.Split(s, "\n")
@@ -1263,6 +1309,7 @@ func cleanText(s string) string {
 	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
+// firstInt 用正则取出第一段整数，没有时返回 0。
 func firstInt(re *regexp.Regexp, s string) int {
 	m := re.FindStringSubmatch(s)
 	if len(m) != 2 {
@@ -1272,6 +1319,7 @@ func firstInt(re *regexp.Regexp, s string) int {
 	return n
 }
 
+// runeLen 按字符数计算长度，用来比较摘要和日志全文哪个更完整。
 func runeLen(s string) int {
 	return len([]rune(s))
 }

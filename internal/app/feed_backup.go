@@ -142,8 +142,8 @@ func (b *FeedBackup) Backup(ctx context.Context, targetUin string, exclude bool,
 			b.logger.Info("继续往前下载，直到没有更多动态")
 			continue
 		default:
+			// 用户选择就到这里。写在 switch 里的 break 只会结束分支，停不了这个循环。
 			b.stoppedEarly = true
-			break
 		}
 		break
 	}
@@ -154,6 +154,8 @@ func (b *FeedBackup) Backup(ctx context.Context, targetUin string, exclude bool,
 	return &b.results, nil
 }
 
+// fetchPages 从 cursor 继续往前拉，最多收 limit 页还没备份过的动态。
+// 整页都是已保存内容时不计入这个额度。more 为 false 表示个人中心没有更早的动态了。
 func (b *FeedBackup) fetchPages(ctx context.Context, p *mpb.Progress, targetUin string, exclude bool, known map[string]MoodPost, seen map[string]bool, cursor *qzone.FeedCursor, limit int) ([]MoodPost, bool, error) {
 	bar := p.AddBar(int64(limit),
 		mpb.BarRemoveOnComplete(),
@@ -246,11 +248,11 @@ func (b *FeedBackup) fetchPages(ctx context.Context, p *mpb.Progress, targetUin 
 		}
 		newPages++
 	}
-	// total>0 的进度条会忽略 SetTotal。页数没走满就返回时，不 Abort 的话后面的 Wait 会一直停在这里。
 	finishBar(bar)
 	return posts, more, nil
 }
 
+// finishBar 收起一张还没走满的进度条。总数大于 0 时 SetTotal 不会生效，不中止的话 Wait 会一直停住。
 func finishBar(bar *mpb.Bar) {
 	if bar == nil {
 		return
@@ -258,6 +260,7 @@ func finishBar(bar *mpb.Bar) {
 	bar.Abort(true)
 }
 
+// advanceCursor 用本页最早一条的发表时间减 1 秒作为下一页起点，并带上接口返回的翻页参数。
 func (b *FeedBackup) advanceCursor(cursor *qzone.FeedCursor, posts []MoodPost, page *qzone.FeedPage) {
 	oldest := int64(0)
 	for _, post := range posts {
@@ -282,6 +285,7 @@ func (b *FeedBackup) advanceCursor(cursor *qzone.FeedCursor, posts []MoodPost, p
 	cursor.Page++
 }
 
+// enrich 补日志正文、说说的点赞人和评论。动态列表里通常只有赞数，没有评论正文。
 func (b *FeedBackup) enrich(ctx context.Context, p *mpb.Progress, posts []MoodPost) {
 	if b.client == nil || len(posts) == 0 {
 		return
@@ -390,6 +394,7 @@ func (b *FeedBackup) enrich(ctx context.Context, p *mpb.Progress, posts []MoodPo
 	}
 }
 
+// enrichBlog 拉取单篇日志的正文和评论，写回这条动态。
 func (b *FeedBackup) enrichBlog(ctx context.Context, post *MoodPost) {
 	detail, err := b.client.GetBlogDetail(ctx, post.Author.UIN, post.BlogID)
 	if err != nil {
@@ -414,6 +419,7 @@ func (b *FeedBackup) enrichBlog(ctx context.Context, post *MoodPost) {
 	}
 }
 
+// needFeedComments 判断这条动态还要不要再请求评论。列表已标明没有评论，或本地条数已经齐，就不再打接口。
 func needFeedComments(post *MoodPost) bool {
 	if post == nil {
 		return false
@@ -427,6 +433,7 @@ func needFeedComments(post *MoodPost) bool {
 	return true
 }
 
+// applyLikers 把点赞名单写回动态。人数取接口总数和名单长度中较大的一个。
 func applyLikers(post *MoodPost, likers []qzone.MoodLiker, total int) {
 	if len(likers) > 0 {
 		post.Likes = likersToPeople(likers)
@@ -439,6 +446,7 @@ func applyLikers(post *MoodPost, likers []qzone.MoodLiker, total int) {
 	}
 }
 
+// likersToPeople 把接口返回的点赞人转成查看页使用的人员信息。
 func likersToPeople(likers []qzone.MoodLiker) []MoodPerson {
 	out := make([]MoodPerson, 0, len(likers))
 	for _, x := range likers {
@@ -447,6 +455,7 @@ func likersToPeople(likers []qzone.MoodLiker) []MoodPerson {
 	return out
 }
 
+// applyRemarks 用当前登录账号的好友备注替换动态里的昵称。备注拉失败时仍保留原来的名字。
 func (b *FeedBackup) applyRemarks(ctx context.Context, p *mpb.Progress, posts []MoodPost) {
 	if len(posts) == 0 {
 		return
@@ -466,6 +475,7 @@ func (b *FeedBackup) applyRemarks(ctx context.Context, p *mpb.Progress, posts []
 	applyFriendNamesToPosts(posts, names)
 }
 
+// persist 合并新旧动态并下载头像，然后重写 backup.json 和 index.html。每收完一批就写一次，中途停下也能打开已有内容。
 func (b *FeedBackup) persist(root, targetUin string, exclude bool, known map[string]MoodPost, existing *FeedBackupFile, fetched []MoodPost) error {
 	merged := mergeFeed(fetched, existing, exclude)
 	if len(merged) == 0 && existing == nil {
@@ -523,6 +533,7 @@ func (b *FeedBackup) persist(root, targetUin string, exclude bool, known map[str
 	return nil
 }
 
+// mergeFeed 把本轮新拉到的动态和本地已有记录合成一份，供保存和统计跳过条数。
 func mergeFeed(fetched []MoodPost, existing *FeedBackupFile, exclude bool) []MoodPost {
 	if existing == nil {
 		return append([]MoodPost{}, fetched...)
@@ -533,6 +544,7 @@ func mergeFeed(fetched []MoodPost, existing *FeedBackupFile, exclude bool) []Moo
 	return existing.Posts
 }
 
+// feedNotice 按这次是翻到头还是用户中途停下，生成查看页顶部的说明。
 func feedNotice(reachedEnd, stoppedEarly bool) string {
 	if reachedEnd && !stoppedEarly {
 		return "个人中心目前能翻到的动态已经收在这里，含好友备注、正文、图片视频、时间和赞评。再早的内容可能已经不在信息中心里。"
@@ -540,6 +552,7 @@ func feedNotice(reachedEnd, stoppedEarly bool) string {
 	return "这里是个人中心已经保存的好友动态。网页上继续往下拉还能看到的更早内容，回到程序里再备份即可接着收。"
 }
 
+// oldestText 找出目前已保存动态里最早的日期，询问要不要继续时显示给用户。
 func (b *FeedBackup) oldestText(fetched []MoodPost, existing *FeedBackupFile) string {
 	var oldest int64
 	consider := func(posts []MoodPost) {
@@ -559,6 +572,7 @@ func (b *FeedBackup) oldestText(fetched []MoodPost, existing *FeedBackupFile) st
 	return time.Unix(oldest, 0).In(shanghaiLoc).Format("2006-01-02")
 }
 
+// downloadAllMedia 并发下载这批动态的图片和视频。本地已经有内容的文件会跳过。
 func (b *FeedBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root, targetUin string, posts []MoodPost) error {
 	ptrs := collectMediaPtrs(posts)
 	if len(ptrs) == 0 {
@@ -598,6 +612,7 @@ func (b *FeedBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root
 	return nil
 }
 
+// downloadOneMedia 下载单份图片或视频，并把本地相对路径写回去。图片按原图、大高清图、小图的顺序尝试。
 func (b *FeedBackup) downloadOneMedia(ctx context.Context, root, targetUin string, posts []MoodPost, idx int, m *MoodMedia) {
 	if m == nil {
 		return
@@ -652,6 +667,7 @@ func (b *FeedBackup) downloadOneMedia(ctx context.Context, root, targetUin strin
 	b.noteMediaSuccess(m.Type == "video")
 }
 
+// downloadCandidates 按给定顺序逐个尝试地址，第一张下载成功就停止。
 func (b *FeedBackup) downloadCandidates(ctx context.Context, targetUin string, urls []string, dest, name string, isVideo bool) (map[string]interface{}, error) {
 	var lastErr error
 	tried := map[string]bool{}
@@ -677,6 +693,7 @@ func (b *FeedBackup) downloadCandidates(ctx context.Context, targetUin string, u
 	return nil, lastErr
 }
 
+// downloadOneURL 以个人中心页面为来源下载一条地址。视频链接失效时会去掉 Cookie 再试一次。
 func (b *FeedBackup) downloadOneURL(ctx context.Context, targetUin, rawURL, dest, name string, isVideo bool) (map[string]interface{}, error) {
 	headers := map[string]string{
 		"cookie":     b.client.Cookie,
@@ -713,6 +730,7 @@ func (b *FeedBackup) downloadOneURL(ctx context.Context, targetUin, rawURL, dest
 	return res, err
 }
 
+// downloadAvatars 把头像保存为 avatars/<QQ号>.jpg。单个头像失败不影响这条动态，查看页会改用名字首字。
 func (b *FeedBackup) downloadAvatars(ctx context.Context, root string, posts []MoodPost) map[string]string {
 	people := collectPeople(posts)
 	dir := filepath.Join(root, "avatars")
@@ -757,12 +775,14 @@ func (b *FeedBackup) downloadAvatars(ctx context.Context, root string, posts []M
 	return out
 }
 
+// trackWrittenBytes 把这次写出的字节数累加到任务摘要里。
 func (b *FeedBackup) trackWrittenBytes(delta int64) {
 	if delta > 0 {
 		atomic.AddUint64(&b.results.BytesDone, uint64(delta))
 	}
 }
 
+// noteMediaSuccess 累加成功的图片或视频数量。动态条数在保存查看页时另行统计。
 func (b *FeedBackup) noteMediaSuccess(isVideo bool) {
 	if isVideo {
 		atomic.AddUint64(&b.results.VideoCount, 1)
@@ -860,6 +880,7 @@ func (b *FeedBackup) RetryFailed(ctx context.Context, targetUin string, items []
 	return &b.results, nil
 }
 
+// uniqueStrings 去掉空值和重复的说说编号，便于按作者一次拉取点赞数。
 func uniqueStrings(in []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(in))

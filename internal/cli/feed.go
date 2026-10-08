@@ -220,6 +220,7 @@ func (c *CLI) handleViewFeed() {
 	c.openLocalViewer(indexMap[selected])
 }
 
+// printFeedViewerHint 在备份结束后打印目录和查看页路径。
 func (c *CLI) printFeedViewerHint(targetUin string) {
 	index := app.FeedIndexPath(targetUin)
 	cyan := color.New(color.FgCyan).SprintFunc()

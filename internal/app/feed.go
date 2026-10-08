@@ -53,18 +53,22 @@ type FeedViewerInfo struct {
 // FeedDefaultPages 返回每次连续拉取的页数。一页大约 10 条。
 func FeedDefaultPages() int { return feedDefaultPages }
 
+// feedRoot 返回某个账号的个人中心动态目录 storage/qzone/<QQ号>/dongtai。
 func feedRoot(targetUin string) string {
 	return filepath.Join("storage", "qzone", targetUin, feedDirName)
 }
 
+// feedBackupPath 返回 backup.json 的路径。
 func feedBackupPath(root string) string {
 	return filepath.Join(root, "data", feedBackupFile)
 }
 
+// feedIndexPath 返回这份备份的 index.html 路径。
 func feedIndexPath(root string) string {
 	return filepath.Join(root, feedIndexFile)
 }
 
+// loadFeedBackup 读取已有的 backup.json。第一次备份时文件还不存在，调用方可以忽略错误。
 func loadFeedBackup(root string) (*FeedBackupFile, error) {
 	data, err := os.ReadFile(feedBackupPath(root))
 	if err != nil {
@@ -77,6 +81,7 @@ func loadFeedBackup(root string) (*FeedBackupFile, error) {
 	return &file, nil
 }
 
+// saveFeedBackup 按时间整理动态并写入 backup.json。
 func saveFeedBackup(root string, file *FeedBackupFile) error {
 	if file == nil {
 		return nil

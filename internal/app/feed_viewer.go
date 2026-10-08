@@ -15,6 +15,7 @@ import (
 	"github.com/qinjintian/qq-zone/internal/app/viewer"
 )
 
+// writeFeedViewer 生成可双击打开的 index.html，并把动态按年写成 data/posts-*.js。
 func writeFeedViewer(root string, file *FeedBackupFile) error {
 	if file == nil {
 		return fmt.Errorf("empty feed backup")

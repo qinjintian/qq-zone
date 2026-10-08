@@ -53,6 +53,7 @@ type BlogDetail struct {
 	Raw   string
 }
 
+// feedCGIContext 给信息中心和日志接口加上超时，避免单次请求一直不返回。
 func feedCGIContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
@@ -160,6 +161,7 @@ func (c *Client) GetBlogDetail(ctx context.Context, hostUin, blogID string) (*Bl
 	return nil, lastErr
 }
 
+// getBlogDetailFrom 向指定日志接口拉一篇正文。个人中心和日志域名各试一次时会调用它。
 func (c *Client) getBlogDetailFrom(ctx context.Context, apiURL, hostUin, blogID string) (*BlogDetail, error) {
 	params := url.Values{}
 	params.Set("uin", hostUin)
@@ -246,6 +248,7 @@ func (c *Client) GetBlogComments(ctx context.Context, hostUin, blogID string) ([
 	return parseBlogComments(bodyStr)
 }
 
+// feedHeaders 返回访问个人中心接口时要带的 Cookie 和来源页。
 func (c *Client) feedHeaders() map[string]string {
 	uin := ""
 	if c != nil {
@@ -330,6 +333,7 @@ func parseFeedBody(body string) (*FeedPage, error) {
 	return page, nil
 }
 
+// parseBlogDetail 从日志接口响应里取出标题和正文 HTML。
 func parseBlogDetail(body string) (*BlogDetail, error) {
 	data, err := parseCGIBody(body)
 	if err != nil {
@@ -367,6 +371,7 @@ func parseBlogDetail(body string) (*BlogDetail, error) {
 	return &BlogDetail{Title: strings.TrimSpace(title), HTML: rawHTML, Raw: data}, nil
 }
 
+// parseBlogComments 从日志评论接口里取出评论列表。没有评论时返回空列表。
 func parseBlogComments(body string) ([]gjson.Result, error) {
 	data, err := parseCGIBody(body)
 	if err != nil {
@@ -397,6 +402,7 @@ func parseBlogComments(body string) ([]gjson.Result, error) {
 	return nil, nil
 }
 
+// feedAPIError 把信息中心和日志接口的错误码转成可读错误。登录失效会明确提示重新扫码。
 func feedAPIError(code int64, msg string) error {
 	msg = strings.TrimSpace(msg)
 	switch code {
@@ -410,6 +416,7 @@ func feedAPIError(code int64, msg string) error {
 	}
 }
 
+// feedItems 从几种可能的字段里取出结构化动态列表。实际页面经常只有 HTML，这时返回空。
 func feedItems(res gjson.Result) []gjson.Result {
 	if res.Get("data").IsArray() && len(res.Get("data").Array()) > 0 {
 		return res.Get("data").Array()
@@ -431,6 +438,7 @@ func feedItems(res gjson.Result) []gjson.Result {
 	return nil
 }
 
+// firstJSONString 按顺序返回第一个非空字符串字段。
 func firstJSONString(res gjson.Result, paths ...string) string {
 	for _, path := range paths {
 		v := res.Get(path)
@@ -445,6 +453,7 @@ func firstJSONString(res gjson.Result, paths ...string) string {
 	return ""
 }
 
+// jsonBool 读取布尔字段。第二个返回值表示这个字段是否真的出现过。
 func jsonBool(res gjson.Result, paths ...string) (bool, bool) {
 	for _, path := range paths {
 		v := res.Get(path)
@@ -471,6 +480,7 @@ func jsonBool(res gjson.Result, paths ...string) (bool, bool) {
 	return false, false
 }
 
+// normalizeFeedHTML 整理动态卡片 HTML。若整段仍是转义文本，先还原成真正的标签。
 func normalizeFeedHTML(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -483,6 +493,7 @@ func normalizeFeedHTML(s string) string {
 	return s
 }
 
+// decodeCGIBytes 把接口响应按 UTF-8 读取，不是 UTF-8 时再按 GBK 解码。
 func decodeCGIBytes(b []byte) string {
 	if len(b) == 0 {
 		return ""
