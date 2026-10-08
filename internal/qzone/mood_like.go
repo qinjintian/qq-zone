@@ -158,6 +158,22 @@ func (c *Client) GetMoodLikeList(ctx context.Context, targetUin, tid string) ([]
 	return c.getMoodLikeListOnce(ctx, targetUin, moodUnikey(targetUin, tid))
 }
 
+// GetLikeListByUnikey 按资源键拉点赞人。日志、相册的 unikey 和说说不一样，由调用方拼好。
+func (c *Client) GetLikeListByUnikey(ctx context.Context, ownerUin, unikey string) ([]MoodLiker, int, error) {
+	unikey = strings.TrimSpace(unikey)
+	if c == nil || unikey == "" {
+		return nil, 0, nil
+	}
+	likers, total, err := c.getMoodLikeListOnce(ctx, ownerUin, unikey)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(likers) > 0 || total > 0 || strings.HasSuffix(unikey, ".1") {
+		return likers, total, nil
+	}
+	return c.getMoodLikeListOnce(ctx, ownerUin, unikey+".1")
+}
+
 // getMoodLikeListOnce 请求一页 get_like_list_app；begin_uin=0 表示从名单开头取。
 func (c *Client) getMoodLikeListOnce(ctx context.Context, targetUin, unikey string) ([]MoodLiker, int, error) {
 	selfUin := firstNonEmpty(c.QQ, targetUin) // 接口校验登录态，必须是当前登录 QQ

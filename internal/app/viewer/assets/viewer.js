@@ -10,7 +10,17 @@
   var lbImg = document.getElementById("lb-img");
 
   var isBoard = meta.kind === "board";
-  var copy = isBoard
+  var isFeed = meta.kind === "feed";
+  var copy = isFeed
+    ? {
+        empty: "没有符合条件的动态",
+        search: "搜索好友、正文、日志标题、评论…",
+        title: "的个人中心",
+        more: " 条评论",
+        stats: " 条评论",
+        end: " 条动态"
+      }
+    : isBoard
     ? {
         empty: "没有符合条件的留言",
         search: "搜索留言、回复…",
@@ -92,7 +102,7 @@
   }
 
   function haystack(p) {
-    var parts = [p.content, p.location, p.source, p.share_title];
+    var parts = [p.content, p.location, p.source, p.share_title, p.title, p.action, p.feed_label];
     if (p.author) parts.push(p.author.name);
     (p.likes || []).forEach(function (x) { parts.push(x && x.name); });
     if (p.repost) parts.push(p.repost.content, p.repost.author && p.repost.author.name);
@@ -121,9 +131,19 @@
       if (state.year !== "all") {
         if (yearOf(p) !== state.year) return false;
       }
-      if (state.filter === "photo" && !hasImage(p)) return false;
-      if (state.filter === "video" && !hasType(p, "video")) return false;
-      if (state.filter === "secret" && !p.secret) return false;
+      if (isFeed) {
+        if (state.filter === "shuoshuo" && p.feed_type !== "shuoshuo") return false;
+        if (state.filter === "blog" && p.feed_type !== "blog") return false;
+        if (state.filter === "album" && p.feed_type !== "photo") return false;
+        if (state.filter === "share" && p.feed_type !== "share") return false;
+        if (state.filter === "repost" && p.feed_type !== "repost") return false;
+        if (state.filter === "image" && !hasImage(p)) return false;
+        if (state.filter === "video" && !hasType(p, "video")) return false;
+      } else {
+        if (state.filter === "photo" && !hasImage(p)) return false;
+        if (state.filter === "video" && !hasType(p, "video")) return false;
+        if (state.filter === "secret" && !p.secret) return false;
+      }
       if (q && haystack(p).indexOf(q) === -1) return false;
       return true;
     });
@@ -238,13 +258,44 @@
     }
     var badge = p.secret ? '<span class="badge-secret">私密</span>' : "";
     var floor = (isBoard && p.floor) ? '<span class="floor">第' + p.floor + "楼</span>" : "";
+    var pill = "";
+    if (isFeed && p.feed_label) {
+      pill = '<span class="feed-pill t-' + escapeHtml(p.feed_type || "other") + '">' + escapeHtml(p.feed_label) + "</span>";
+    }
+    if (isFeed && p.action) {
+      src = "<span>" + escapeHtml(p.action) + "</span>" + src;
+    }
+    var title = "";
+    if (isFeed && p.title && String(p.title).trim() !== String(p.content || "").trim()) {
+      title = '<div class="feed-title">' + escapeHtml(p.title) + "</div>";
+    }
+    var body = richText(p.html, p.content);
+    if (isFeed && p.title && String(p.content || "").trim() === String(p.title).trim()) body = "";
     return '<article class="card" data-id="' + escapeHtml(p.tid || pid) + '">' +
       '<div class="card-head">' + avatarHtml(p.author, "avatar") +
-      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + badge + floor + "</div>" +
+      '<div class="meta"><div class="name">' + escapeHtml((p.author && p.author.name) || "") + pill + badge + floor + "</div>" +
       '<div class="when">' + when + loc + src + "</div></div></div>" +
-      '<div class="content">' + richText(p.html, p.content) + "</div>" +
+      title +
+      (body ? '<div class="content">' + body + "</div>" : "") +
       share + mediaGrid(p.media, pid) + repost + stats + likeBlock +
       commentBlock + "</article>";
+  }
+
+  function dayLabel(p) {
+    if (!p.time) return "时间未知";
+    var d = new Date((Number(p.time) + 8 * 3600) * 1000);
+    var now = new Date(Date.now() + 8 * 3600 * 1000);
+    var y = d.getUTCFullYear();
+    var m = d.getUTCMonth() + 1;
+    var day = d.getUTCDate();
+    var ny = now.getUTCFullYear();
+    var nm = now.getUTCMonth() + 1;
+    var nd = now.getUTCDate();
+    if (y === ny && m === nm && day === nd) return "今天";
+    var yest = new Date(now.getTime() - 24 * 3600 * 1000);
+    if (y === yest.getUTCFullYear() && m === yest.getUTCMonth() + 1 && day === yest.getUTCDate()) return "昨天";
+    if (y === ny) return m + "月" + day + "日";
+    return y + "年" + m + "月" + day + "日";
   }
 
   function introHtml() {
@@ -260,18 +311,41 @@
     var notice = meta.notice ? '<div class="notice">' + escapeHtml(meta.notice) + "</div>" : "";
     var head = introHtml() + notice;
     if (!list.length) {
-      feed.innerHTML = head + '<p class="empty">' + copy.empty + "</p>";
+      var emptyText = copy.empty;
+      if (!posts.length && isFeed) emptyText = "个人中心里还没有拉到动态";
+      feed.innerHTML = head + '<p class="empty">' + emptyText + "</p>";
       return;
     }
-    feed.innerHTML = head + list.map(renderPost).join("") + '<p class="end">共 ' + list.length + copy.end + "</p>";
+    if (!isFeed) {
+      feed.innerHTML = head + list.map(renderPost).join("") + '<p class="end">共 ' + list.length + copy.end + "</p>";
+      return;
+    }
+    var html = head;
+    var lastDay = "";
+    list.forEach(function (p, idx) {
+      var day = dayLabel(p);
+      if (day !== lastDay) {
+        html += '<h2 class="day-head">' + escapeHtml(day) + "</h2>";
+        lastDay = day;
+      }
+      html += renderPost(p, idx);
+    });
+    feed.innerHTML = html + '<p class="end">共 ' + list.length + copy.end + "</p>";
   }
 
   function fillHeader() {
     if (isBoard) document.documentElement.setAttribute("data-kind", "board");
-    var name = meta.nickname || (isBoard ? "QQ 空间留言" : "QQ 空间说说");
-    document.getElementById("title").textContent = name + copy.title;
-    document.title = name + copy.title + "备份";
+    if (isFeed) document.documentElement.setAttribute("data-kind", "feed");
+    var name = meta.nickname || (isFeed ? "个人中心" : isBoard ? "QQ 空间留言" : "QQ 空间说说");
+    if (isFeed) {
+      document.getElementById("title").textContent = "个人中心";
+      document.title = (meta.nickname ? meta.nickname + "的" : "") + "个人中心动态";
+    } else {
+      document.getElementById("title").textContent = name + copy.title;
+      document.title = name + copy.title + "备份";
+    }
     var bits = [];
+    if (isFeed && meta.nickname) bits.push(meta.nickname);
     if (meta.uin) bits.push("QQ " + meta.uin);
     bits.push((meta.total || posts.length) + copy.end);
     if (meta.exported_at) bits.push("导出于 " + meta.exported_at);
@@ -279,6 +353,9 @@
     if (searchEl) searchEl.setAttribute("placeholder", copy.search);
     if (isBoard && filterEl) {
       filterEl.innerHTML = '<option value="all">全部</option><option value="photo">有图</option><option value="secret">私密</option>';
+    }
+    if (isFeed && filterEl) {
+      filterEl.innerHTML = '<option value="all">全部动态</option><option value="shuoshuo">说说</option><option value="blog">日志</option><option value="album">相册</option><option value="share">分享</option><option value="repost">转发</option><option value="image">有图</option><option value="video">有视频</option>';
     }
   }
 

@@ -36,6 +36,9 @@ const FailedKindBoard = "board"
 // FailedKindGroup 标记这条失败记录来自群相册备份。
 const FailedKindGroup = "group"
 
+// FailedKindFeed 标记这条失败记录来自个人中心动态备份。
+const FailedKindFeed = "feed"
+
 // FailedItem 记录单个媒体文件失败时的完整上下文，既用于控制台展示，也用于后续失败重试。
 type FailedItem struct {
 	Album     string `json:"album"`                // 相册名称；说说固定「说说」，留言板固定「留言板」
