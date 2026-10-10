@@ -159,6 +159,20 @@ func (c *Client) GetMoodDetail(ctx context.Context, targetUin, tid string) (*Moo
 	return detail, nil
 }
 
+// GetMoodItem 只拉说说详情的第一页，用来识别实况图和视频。
+// 不翻评论，避免为了补一个播放地址把整页评论再请求一遍。
+func (c *Client) GetMoodItem(ctx context.Context, targetUin, tid string) (gjson.Result, error) {
+	tid = strings.TrimSpace(tid)
+	if tid == "" {
+		return gjson.Result{}, fmt.Errorf("empty mood tid")
+	}
+	item, _, err := c.getMoodDetailPage(ctx, targetUin, tid, 0, 20)
+	if err != nil {
+		return gjson.Result{}, err
+	}
+	return item, nil
+}
+
 // getMoodDetailPage 拉取详情接口的一页评论；not_trunc_con=1 尽量拿完整正文。
 func (c *Client) getMoodDetailPage(ctx context.Context, targetUin, tid string, pos, num int) (gjson.Result, []gjson.Result, error) {
 	params := url.Values{}

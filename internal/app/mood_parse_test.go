@@ -80,8 +80,8 @@ func TestParseMoodPost(t *testing.T) {
 	if len(post.Media) != 1 || post.Media[0].Type != "image" {
 		t.Fatalf("media = %+v", post.Media)
 	}
-	if post.Media[0].URL != "https://example.com/origin.jpg" {
-		t.Fatalf("pic url = %s", post.Media[0].URL)
+	if post.Media[0].URL != "https://example.com/origin.jpg" || len(post.Media[0].URLs) != 1 {
+		t.Fatalf("pic url = %s candidates %v", post.Media[0].URL, post.Media[0].URLs)
 	}
 	if post.Repost == nil || post.Repost.Author.Name != "阿强" {
 		t.Fatalf("repost = %+v", post.Repost)
@@ -91,6 +91,26 @@ func TestParseMoodPost(t *testing.T) {
 	}
 	if post.EditTime != 1520941440 || post.EditTimeText == "" {
 		t.Fatalf("edit time = %d %s", post.EditTime, post.EditTimeText)
+	}
+}
+
+func TestMoodImagePicksOneQuality(t *testing.T) {
+	withOrigin := gjson.Parse(`{"origin_url":"http://example.com/origin.jpg","url3":"http://example.com/b&bo=xx","url1":"http://example.com/s.jpg"}`)
+	got := moodImageCandidates(withOrigin)
+	if len(got) != 1 || got[0] != "https://example.com/origin.jpg" {
+		t.Fatalf("origin %v", got)
+	}
+
+	hdOnly := gjson.Parse(`{"url3":"https://a1.qpic.cn/psc?/abc/def/b&ek=1&sce=60-3-3","url1":"https://a1.qpic.cn/psc?/abc/def/c&ek=1&sce=60-2-2"}`)
+	got = moodImageCandidates(hdOnly)
+	if len(got) != 1 || !strings.Contains(got[0], "/b&ek=") {
+		t.Fatalf("hd %v", got)
+	}
+
+	smallOnly := gjson.Parse(`{"url1":"https://a1.qpic.cn/psc?/abc/def/c&ek=1&sce=60-2-2"}`)
+	got = moodImageCandidates(smallOnly)
+	if len(got) != 1 || !strings.Contains(got[0], "/c&ek=") {
+		t.Fatalf("small %v", got)
 	}
 }
 

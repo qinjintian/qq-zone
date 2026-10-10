@@ -137,27 +137,27 @@ func parseMoodComment(raw gjson.Result) MoodComment {
 func parseCommentMedia(raw gjson.Result) []MoodMedia {
 	var out []MoodMedia
 	raw.Get("pic").ForEach(func(_, pic gjson.Result) bool {
-		u := pickPicURL(pic)
-		if u == "" {
+		cands := moodImageCandidates(pic)
+		if len(cands) == 0 {
 			return true
 		}
 		out = append(out, MoodMedia{
 			ID:   strings.TrimSpace(firstMoodString(pic, "pic_id", "picId")),
 			Type: "image",
-			URL:  u,
-			URLs: compactURLs(u),
+			URL:  cands[0],
+			URLs: cands,
 		})
 		return true
 	})
 	raw.Get("rich_info").ForEach(func(_, info gjson.Result) bool {
-		u := normalizeMediaURL(firstMoodString(info, "burl", "url"))
+		u := firstMoodPhoto(info, false, "burl", "url")
 		if u == "" {
 			return true
 		}
 		out = append(out, MoodMedia{
 			Type: "image",
 			URL:  u,
-			URLs: compactURLs(u),
+			URLs: []string{u},
 		})
 		return true
 	})
@@ -165,6 +165,7 @@ func parseCommentMedia(raw gjson.Result) []MoodMedia {
 }
 
 // parseMoodMedia 从说说正文收集图片、视频和语音；同一张图按 id/url 去重。
+// 实况图的 mp4 在 pic.video_info 里，有播放地址才记成视频，否则仍按普通配图保存。
 func parseMoodMedia(item gjson.Result) []MoodMedia {
 	var out []MoodMedia
 	seen := map[string]bool{}
@@ -190,26 +191,32 @@ func parseMoodMedia(item gjson.Result) []MoodMedia {
 		videoInfo := pic.Get("video_info")
 		if pic.Get("is_video").Bool() || pic.Get("is_video").Int() == 1 || videoInfo.Exists() && videoInfo.Type != gjson.Null {
 			vidURL := pickVideoURL(videoInfo)
-			if vidURL == "" {
-				vidURL = pickPicURL(pic)
+			if !looksLikeVideo(vidURL) {
+				vidURL = pickVideoURL(pic)
 			}
-			add(MoodMedia{
-				ID:      strings.TrimSpace(firstMoodString(pic, "pic_id", "video_id", "img_id")),
-				Type:    "video",
-				URL:     vidURL,
-				URLs:    compactURLs(vidURL, pickVideoURL(videoInfo), pickPicURL(pic)),
-				VideoID: strings.TrimSpace(firstMoodString(videoInfo, "video_id", "vid")),
-				Width:   int(pic.Get("width").Int()),
-				Height:  int(pic.Get("height").Int()),
-			})
+			if looksLikeVideo(vidURL) {
+				add(MoodMedia{
+					ID:      strings.TrimSpace(firstMoodString(pic, "pic_id", "video_id", "img_id")),
+					Type:    "video",
+					URL:     vidURL,
+					URLs:    compactURLs(vidURL, pickVideoURL(videoInfo), pickPicURL(pic)),
+					VideoID: strings.TrimSpace(firstMoodString(videoInfo, "video_id", "vid")),
+					Poster:  moodStillPoster(videoInfo, pic),
+					Width:   int(pic.Get("width").Int()),
+					Height:  int(pic.Get("height").Int()),
+				})
+				return true
+			}
+		}
+		cands := moodImageCandidates(pic)
+		if len(cands) == 0 {
 			return true
 		}
-		u := pickPicURL(pic)
 		add(MoodMedia{
 			ID:     strings.TrimSpace(firstMoodString(pic, "pic_id", "img_id")),
 			Type:   "image",
-			URL:    u,
-			URLs:   compactURLs(u, pickPicURL(pic)),
+			URL:    cands[0],
+			URLs:   cands,
 			Width:  int(pic.Get("width").Int()),
 			Height: int(pic.Get("height").Int()),
 		})
@@ -218,12 +225,16 @@ func parseMoodMedia(item gjson.Result) []MoodMedia {
 
 	item.Get("video").ForEach(func(_, video gjson.Result) bool {
 		u := pickVideoURL(video)
+		if !looksLikeVideo(u) {
+			return true
+		}
 		add(MoodMedia{
 			ID:      strings.TrimSpace(firstMoodString(video, "video_id", "vid", "id")),
 			Type:    "video",
 			URL:     u,
 			URLs:    compactURLs(u, pickVideoURL(video)),
 			VideoID: strings.TrimSpace(firstMoodString(video, "video_id", "vid")),
+			Poster:  moodStillPoster(video),
 			Width:   int(video.Get("width").Int()),
 			Height:  int(video.Get("height").Int()),
 		})
@@ -291,8 +302,8 @@ func appendMoodPicURLs(post *MoodPost, urls []string) {
 		}
 	}
 	for i, raw := range urls {
-		u := normalizeMediaURL(raw)
-		if u == "" || have[u] {
+		u := prepareFeedPhotoURL(raw)
+		if u == "" || u == "||" || have[u] {
 			continue
 		}
 		have[u] = true
@@ -300,7 +311,7 @@ func appendMoodPicURLs(post *MoodPost, urls []string) {
 			ID:   "extra-" + strconv.Itoa(i),
 			Type: "image",
 			URL:  u,
-			URLs: compactURLs(u),
+			URLs: []string{u},
 		})
 	}
 }
@@ -372,11 +383,56 @@ func moodLooksEmpty(post MoodPost) bool {
 		post.PicTotal == 0
 }
 
-// pickPicURL 按清晰度从高到低挑图片地址：原图 → url3 → 缩略图。
+// pickPicURL 返回这张图要下载的那一个地址。有原图用原图，否则高清，再没有才用普通图。
 func pickPicURL(pic gjson.Result) string {
-	for _, key := range []string{"origin_url", "raw", "o_url", "url3", "url2", "url1", "url", "custom_url"} {
-		if u := normalizeMediaURL(pic.Get(key).String()); u != "" {
-			return u
+	cands := moodImageCandidates(pic)
+	if len(cands) == 0 {
+		return ""
+	}
+	return cands[0]
+}
+
+// moodImageCandidates 为同一张配图只保留一个下载地址：有原图用原图，否则高清，再没有才用普通图。
+func moodImageCandidates(pic gjson.Result) []string {
+	if u := firstMoodPhoto(pic, true, "origin_url", "raw", "o_url"); u != "" {
+		return []string{u}
+	}
+	if u := firstMoodPhoto(pic, false, "url3"); u != "" {
+		return []string{u}
+	}
+	if u := firstMoodPhoto(pic, false, "url2", "url1", "url", "custom_url"); u != "" {
+		return []string{u}
+	}
+	return nil
+}
+
+// firstMoodPhoto 在给定字段里取第一条可用地址。原图字段会把 b&bo= 换成原图规格，高清和普通图保持原样。
+func firstMoodPhoto(item gjson.Result, original bool, keys ...string) string {
+	for _, key := range keys {
+		s := strings.TrimSpace(item.Get(key).String())
+		if s == "" || s == "null" || s == "undefined" {
+			continue
+		}
+		if original {
+			return normalizeMediaURL(s)
+		}
+		return prepareFeedPhotoURL(s)
+	}
+	return ""
+}
+
+// moodStillPoster 从视频信息里取一张静态封面。
+// 跳过 mp4 地址，避免查看页把视频文件当成封面图。
+func moodStillPoster(parts ...gjson.Result) string {
+	for _, part := range parts {
+		if !part.Exists() || part.Type == gjson.Null {
+			continue
+		}
+		for _, key := range []string{"pic_url", "cover_url", "cover", "url1"} {
+			u := firstMoodPhoto(part, false, key)
+			if u != "" && !looksLikeVideo(u) {
+				return u
+			}
 		}
 	}
 	return ""
