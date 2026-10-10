@@ -226,9 +226,14 @@ func (b *MoodBackup) RetryFailed(ctx context.Context, targetUin string, items []
 		videoID := ""
 		isVideo := item.IsVideo
 		if media != nil {
-			urls = compactURLs(append([]string{media.URL, item.MediaURL}, media.URLs...)...)
+			urls = append([]string{media.URL, item.MediaURL}, media.URLs...)
 			videoID = media.VideoID
 			isVideo = media.Type == "video"
+		}
+		if isVideo {
+			urls = compactURLs(urls...)
+		} else {
+			urls = compactFeedPhotoURLs(urls...)
 		}
 
 		rel := item.Name
@@ -714,6 +719,7 @@ func (b *MoodBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root
 }
 
 // downloadOneMedia 下载单份媒体并回写相对路径；失败记进 FailedItems 且清空 Path，查看页就不会链到半截文件。
+// 图片只下载一张：有原图用原图，没有再下高清，都没有才用普通图。
 func (b *MoodBackup) downloadOneMedia(ctx context.Context, root, targetUin string, posts []MoodPost, idx int, m *MoodMedia) {
 	if m == nil {
 		return
@@ -735,7 +741,13 @@ func (b *MoodBackup) downloadOneMedia(ctx context.Context, root, targetUin strin
 		}
 	}
 
-	res, err := b.downloadCandidates(ctx, targetUin, compactURLs(append([]string{m.URL}, m.URLs...)...), m.VideoID, dest, filepath.Base(rel), m.Type == "video")
+	cands := append([]string{m.URL}, m.URLs...)
+	if m.Type == "video" {
+		cands = compactURLs(cands...)
+	} else {
+		cands = compactFeedPhotoURLs(cands...)
+	}
+	res, err := b.downloadCandidates(ctx, targetUin, cands, m.VideoID, dest, filepath.Base(rel), m.Type == "video")
 	if err != nil {
 		b.results.addFailedItem(FailedItem{
 			Album:     "说说",
@@ -871,8 +883,12 @@ func (b *MoodBackup) downloadCandidates(ctx context.Context, targetUin string, u
 	tried := map[string]bool{}
 
 	try := func(raw string) (map[string]interface{}, error) {
-		raw = normalizeMediaURL(raw)
-		if raw == "" || tried[raw] {
+		if isVideo {
+			raw = normalizeMediaURL(raw)
+		} else {
+			raw = prepareFeedPhotoURL(raw)
+		}
+		if raw == "" || raw == "||" || tried[raw] {
 			return nil, fmt.Errorf("empty url")
 		}
 		tried[raw] = true
