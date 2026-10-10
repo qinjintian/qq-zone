@@ -719,7 +719,7 @@ func (b *MoodBackup) downloadAllMedia(ctx context.Context, p *mpb.Progress, root
 }
 
 // downloadOneMedia 下载单份媒体并回写相对路径；失败记进 FailedItems 且清空 Path，查看页就不会链到半截文件。
-// 图片只下载一张：有原图用原图，没有再下高清，都没有才用普通图。
+// 一条说说里的每张配图都会下载，同一张只保留最高清的那一个地址。
 func (b *MoodBackup) downloadOneMedia(ctx context.Context, root, targetUin string, posts []MoodPost, idx int, m *MoodMedia) {
 	if m == nil {
 		return

@@ -384,7 +384,7 @@ func pickPicURL(pic gjson.Result) string {
 	return cands[0]
 }
 
-// moodImageCandidates 只保留一张图要下载的地址，不会把原图、高清和普通图都列进来。
+// moodImageCandidates 为同一张配图只保留一个下载地址：有原图用原图，否则高清，再没有才用普通图。
 func moodImageCandidates(pic gjson.Result) []string {
 	if u := firstMoodPhoto(pic, true, "origin_url", "raw", "o_url"); u != "" {
 		return []string{u}
