@@ -58,14 +58,25 @@ func (b *FeedBackup) Backup(ctx context.Context, targetUin string, exclude bool,
 	known := map[string]MoodPost{}
 	if existing != nil {
 		existing.Posts = withoutFeedAds(existing.Posts)
-		if upgradeFeedImages(existing.Posts) {
+		imagesChanged := upgradeFeedImages(existing.Posts)
+		needMotion := b.client != nil && feedListNeedsMotion(existing.Posts)
+		pendingVideo := feedListHasPendingVideo(existing.Posts)
+		if imagesChanged || needMotion || pendingVideo {
 			dp := mpb.NewWithContext(ctx)
-			if err := b.downloadAllMedia(ctx, dp, root, targetUin, existing.Posts); err != nil && ctx.Err() == nil {
-				b.logger.Warnf("清晰配图未全部完成: %v", err)
+			motionPersist, motionDownload := false, false
+			if needMotion {
+				motionPersist, motionDownload = b.repairFeedMotion(ctx, dp, existing.Posts)
+			}
+			if imagesChanged || motionDownload || pendingVideo {
+				if err := b.downloadAllMedia(ctx, dp, root, targetUin, existing.Posts); err != nil && ctx.Err() == nil {
+					b.logger.Warnf("配图和视频未全部完成: %v", err)
+				}
 			}
 			dp.Wait()
-			if err := b.persist(root, targetUin, exclude, known, existing, nil); err != nil {
-				return nil, err
+			if imagesChanged || motionPersist || motionDownload || pendingVideo {
+				if err := b.persist(root, targetUin, exclude, known, existing, nil); err != nil {
+					return nil, err
+				}
 			}
 		}
 		for _, p := range existing.Posts {
@@ -361,7 +372,14 @@ func (b *FeedBackup) enrich(ctx context.Context, p *mpb.Progress, posts []MoodPo
 					if post.CommentCount < len(post.Comments) {
 						post.CommentCount = len(post.Comments)
 					}
+					if feedNeedsMotionCheck(post) {
+						applyFeedMoodMedia(post, detail.Item)
+						post.MediaMotionChecked = true
+					}
 				}
+			}
+			if feedNeedsMotionCheck(post) {
+				b.fillFeedMotion(ctx, post)
 			}
 			bar.Increment()
 			done[i] = true
@@ -417,6 +435,98 @@ func (b *FeedBackup) enrichBlog(ctx context.Context, post *MoodPost) {
 	if post.CommentCount < len(post.Comments) {
 		post.CommentCount = len(post.Comments)
 	}
+}
+
+// feedListHasPendingVideo 判断已保存动态里有没有已经识别出、但本地文件还没落下来的视频。
+// 上次下载中断时，下次备份靠这个把 mp4 补上，不必再问一遍详情。
+func feedListHasPendingVideo(posts []MoodPost) bool {
+	for i := range posts {
+		if mediaPendingVideo(posts[i].Media) || (posts[i].Repost != nil && mediaPendingVideo(posts[i].Repost.Media)) {
+			return true
+		}
+	}
+	return false
+}
+
+// mediaPendingVideo 判断这份媒体是不是已经有播放地址、但 Path 还是空的视频。
+func mediaPendingVideo(list []MoodMedia) bool {
+	for _, m := range list {
+		if m.Type == "video" && m.Path == "" && (m.URL != "" || len(m.URLs) > 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// feedListNeedsMotion 判断已保存动态里还有没有没确认过的实况图或视频。
+// 有的话备份开始时会先问说说详情，避免增量跳过已经存成静态图的卡片。
+func feedListNeedsMotion(posts []MoodPost) bool {
+	for i := range posts {
+		if feedNeedsMotionCheck(&posts[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// repairFeedMotion 对已保存、还没确认过的说说再问一次详情，把实况图和视频从静态封面改回来。
+// 返回值分别表示要不要重写 backup.json，以及有没有新的视频需要下载。
+func (b *FeedBackup) repairFeedMotion(ctx context.Context, p *mpb.Progress, posts []MoodPost) (bool, bool) {
+	var idx []int
+	for i := range posts {
+		if feedNeedsMotionCheck(&posts[i]) {
+			idx = append(idx, i)
+		}
+	}
+	if len(idx) == 0 || b.client == nil {
+		return false, false
+	}
+	bar := p.AddBar(int64(len(idx)),
+		mpb.BarRemoveOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name("识别实况和视频 ", decor.WC{W: 16, C: decor.DindentRight}),
+			decor.CountersNoUnit("%d / %d"),
+		),
+		mpb.AppendDecorators(decor.Percentage()),
+	)
+	defer finishBar(bar)
+
+	persist, download := false, false
+	for _, i := range idx {
+		if ctx.Err() != nil {
+			return persist, download
+		}
+		changed, replaced := b.fillFeedMotion(ctx, &posts[i])
+		if changed {
+			persist = true
+		}
+		if replaced {
+			download = true
+		}
+		bar.Increment()
+	}
+	return persist, download
+}
+
+// fillFeedMotion 用说说详情把这条动态里的实况图和视频补上。
+// 第一个返回值表示记录有改动（含「已确认没有视频」），第二个返回值表示确实换成了视频、需要下载。
+// 没有权限时也记成已确认，避免每次备份都打同一条看不见的说说。
+func (b *FeedBackup) fillFeedMotion(ctx context.Context, post *MoodPost) (bool, bool) {
+	if b == nil || b.client == nil || !feedNeedsMotionCheck(post) {
+		return false, false
+	}
+	item, err := b.client.GetMoodItem(ctx, post.Author.UIN, post.OriginTID)
+	if err != nil {
+		b.logger.Debugf("识别实况图失败 %s: %v", post.OriginTID, err)
+		if qzone.IsMoodPermissionError(err) {
+			post.MediaMotionChecked = true
+			return true, false
+		}
+		return false, false
+	}
+	replaced := applyFeedMoodMedia(post, item)
+	post.MediaMotionChecked = true
+	return true, replaced
 }
 
 // needFeedComments 判断这条动态还要不要再请求评论。列表已标明没有评论，或本地条数已经齐，就不再打接口。
@@ -513,7 +623,11 @@ func (b *FeedBackup) persist(root, targetUin string, exclude bool, known map[str
 		}
 	}
 
-	b.notice = feedNotice(b.reachedEnd, b.stoppedEarly)
+	if existing != nil && existing.Notice != "" && len(fetched) == 0 && !b.reachedEnd && !b.stoppedEarly {
+		b.notice = existing.Notice
+	} else {
+		b.notice = feedNotice(b.reachedEnd, b.stoppedEarly)
+	}
 	file := &FeedBackupFile{
 		UIN:      targetUin,
 		Nickname: nickname,

@@ -813,9 +813,16 @@ func feedImages(root, skip *xhtml.Node) []MoodMedia {
 			return
 		}
 		if n.Type == xhtml.ElementNode {
-			if media, ok := mediaFromVideoAttrs(n); ok && !seen[media.URL] {
-				seen[media.URL] = true
-				out = append(out, media)
+			if media, ok := mediaFromVideoAttrs(n); ok {
+				if !seen[media.URL] {
+					seen[media.URL] = true
+					out = append(out, media)
+				}
+				if media.Poster != "" {
+					seen[media.Poster] = true
+				}
+				// 封面图挂在视频节点里面，再往下走会把它收成一张静态图。
+				return
 			}
 		}
 		if n.Type == xhtml.ElementNode && (n.Data == "img" || n.Data == "video" || n.Data == "source") {
@@ -835,9 +842,17 @@ func feedImages(root, skip *xhtml.Node) []MoodMedia {
 }
 
 // mediaFromVideoAttrs 从视频节点的 data-v_* 属性取出播放地址和封面。
+// 个人中心有的视频只把地址放在 data-v_vidioswfurl，data-v_vidiourl 是空的，只读后者会把视频收成封面图。
 func mediaFromVideoAttrs(n *xhtml.Node) (MoodMedia, bool) {
-	play := strings.TrimSpace(firstAttr(n, "data-v_h265", "data-v_vidiourl"))
-	if !strings.Contains(play, "://") {
+	play := ""
+	for _, key := range []string{"data-v_h265", "data-v_vidiourl", "data-v_vidioswfurl", "data-v_playurl"} {
+		v := strings.TrimSpace(attr(n, key))
+		if strings.Contains(v, "://") {
+			play = v
+			break
+		}
+	}
+	if play == "" {
 		return MoodMedia{}, false
 	}
 	urls := filterFeedMediaURLs(compactURLs(play))
@@ -1003,6 +1018,90 @@ func upgradeFeedImages(posts []MoodPost) bool {
 		}
 	}
 	return changed
+}
+
+// feedNeedsMotionCheck 判断这条说说还要不要向详情确认实况图和视频。
+// 信息流卡片上的实况图只有封面，播放地址在说说详情里；已经确认过或卡片上已有视频就不再请求。
+func feedNeedsMotionCheck(post *MoodPost) bool {
+	if post == nil || post.MediaMotionChecked {
+		return false
+	}
+	if post.FeedType != "shuoshuo" && post.FeedType != "repost" {
+		return false
+	}
+	if strings.TrimSpace(post.Author.UIN) == "" || strings.TrimSpace(post.OriginTID) == "" {
+		return false
+	}
+	if mediaHasType(post.Media, "video") || (post.Repost != nil && mediaHasType(post.Repost.Media, "video")) {
+		return false
+	}
+	if mediaHasType(post.Media, "image") {
+		return true
+	}
+	return post.Repost != nil && mediaHasType(post.Repost.Media, "image")
+}
+
+// applyFeedMoodMedia 用说说详情里的视频和实况图替换卡片上的静态封面。
+// 详情里没有可播放的视频时保持原样，已经下好的普通配图不换地址。
+func applyFeedMoodMedia(post *MoodPost, item gjson.Result) bool {
+	if post == nil || !item.Exists() {
+		return false
+	}
+	media := parseMoodMedia(item)
+	if !mediaHasType(media, "video") {
+		return false
+	}
+	target := &post.Media
+	if !mediaHasType(post.Media, "image") && post.Repost != nil && mediaHasType(post.Repost.Media, "image") {
+		target = &post.Repost.Media
+	}
+	reuseDownloadedImages(*target, media)
+	*target = media
+	return true
+}
+
+// mediaHasType 判断媒体列表里有没有指定类型，用来决定要不要再向详情确认实况图。
+func mediaHasType(list []MoodMedia, kind string) bool {
+	for _, m := range list {
+		if m.Type == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// reuseDownloadedImages 把已经下好的普通配图路径接到同一地址的新记录上。
+// 实况图会换成 mp4，不能沿用原来的 jpg 路径。
+func reuseDownloadedImages(old, next []MoodMedia) {
+	paths := map[string]string{}
+	for _, m := range old {
+		if m.Type == "video" || m.Path == "" {
+			continue
+		}
+		if m.URL != "" {
+			paths[m.URL] = m.Path
+		}
+		for _, u := range m.URLs {
+			if u != "" {
+				paths[u] = m.Path
+			}
+		}
+	}
+	for i := range next {
+		if next[i].Type == "video" || next[i].Path != "" {
+			continue
+		}
+		if p := paths[next[i].URL]; p != "" {
+			next[i].Path = p
+			continue
+		}
+		for _, u := range next[i].URLs {
+			if p := paths[u]; p != "" {
+				next[i].Path = p
+				break
+			}
+		}
+	}
 }
 
 // upgradeFeedMedia 把一份媒体的首选地址改成更清晰的图，并清空旧文件路径以便重新下载。

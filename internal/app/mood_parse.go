@@ -165,6 +165,7 @@ func parseCommentMedia(raw gjson.Result) []MoodMedia {
 }
 
 // parseMoodMedia 从说说正文收集图片、视频和语音；同一张图按 id/url 去重。
+// 实况图的 mp4 在 pic.video_info 里，有播放地址才记成视频，否则仍按普通配图保存。
 func parseMoodMedia(item gjson.Result) []MoodMedia {
 	var out []MoodMedia
 	seen := map[string]bool{}
@@ -190,19 +191,22 @@ func parseMoodMedia(item gjson.Result) []MoodMedia {
 		videoInfo := pic.Get("video_info")
 		if pic.Get("is_video").Bool() || pic.Get("is_video").Int() == 1 || videoInfo.Exists() && videoInfo.Type != gjson.Null {
 			vidURL := pickVideoURL(videoInfo)
-			if vidURL == "" {
-				vidURL = pickPicURL(pic)
+			if !looksLikeVideo(vidURL) {
+				vidURL = pickVideoURL(pic)
 			}
-			add(MoodMedia{
-				ID:      strings.TrimSpace(firstMoodString(pic, "pic_id", "video_id", "img_id")),
-				Type:    "video",
-				URL:     vidURL,
-				URLs:    compactURLs(vidURL, pickVideoURL(videoInfo), pickPicURL(pic)),
-				VideoID: strings.TrimSpace(firstMoodString(videoInfo, "video_id", "vid")),
-				Width:   int(pic.Get("width").Int()),
-				Height:  int(pic.Get("height").Int()),
-			})
-			return true
+			if looksLikeVideo(vidURL) {
+				add(MoodMedia{
+					ID:      strings.TrimSpace(firstMoodString(pic, "pic_id", "video_id", "img_id")),
+					Type:    "video",
+					URL:     vidURL,
+					URLs:    compactURLs(vidURL, pickVideoURL(videoInfo), pickPicURL(pic)),
+					VideoID: strings.TrimSpace(firstMoodString(videoInfo, "video_id", "vid")),
+					Poster:  moodStillPoster(videoInfo, pic),
+					Width:   int(pic.Get("width").Int()),
+					Height:  int(pic.Get("height").Int()),
+				})
+				return true
+			}
 		}
 		cands := moodImageCandidates(pic)
 		if len(cands) == 0 {
@@ -221,12 +225,16 @@ func parseMoodMedia(item gjson.Result) []MoodMedia {
 
 	item.Get("video").ForEach(func(_, video gjson.Result) bool {
 		u := pickVideoURL(video)
+		if !looksLikeVideo(u) {
+			return true
+		}
 		add(MoodMedia{
 			ID:      strings.TrimSpace(firstMoodString(video, "video_id", "vid", "id")),
 			Type:    "video",
 			URL:     u,
 			URLs:    compactURLs(u, pickVideoURL(video)),
 			VideoID: strings.TrimSpace(firstMoodString(video, "video_id", "vid")),
+			Poster:  moodStillPoster(video),
 			Width:   int(video.Get("width").Int()),
 			Height:  int(video.Get("height").Int()),
 		})
@@ -409,6 +417,23 @@ func firstMoodPhoto(item gjson.Result, original bool, keys ...string) string {
 			return normalizeMediaURL(s)
 		}
 		return prepareFeedPhotoURL(s)
+	}
+	return ""
+}
+
+// moodStillPoster 从视频信息里取一张静态封面。
+// 跳过 mp4 地址，避免查看页把视频文件当成封面图。
+func moodStillPoster(parts ...gjson.Result) string {
+	for _, part := range parts {
+		if !part.Exists() || part.Type == gjson.Null {
+			continue
+		}
+		for _, key := range []string{"pic_url", "cover_url", "cover", "url1"} {
+			u := firstMoodPhoto(part, false, key)
+			if u != "" && !looksLikeVideo(u) {
+				return u
+			}
+		}
 	}
 	return ""
 }

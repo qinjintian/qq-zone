@@ -250,6 +250,76 @@ func TestParseFeedMonthDay(t *testing.T) {
 	}
 }
 
+func TestFeedVideoSwfURLSkipsPoster(t *testing.T) {
+	html := `
+<li class="f-single f-s-s" id="fct_10001_311_0_1700001111_0_1">
+  <div class="f-single-content f-wrap">
+    <div class="f-item f-s-i" data-key="tidv">
+      <div class="f-info">翠绿邕江</div>
+      <i name="feed_data" data-tid="tidv" data-uin="10001" data-abstime="1700001111"></i>
+      <a class="f-name" href="http://user.qzone.qq.com/10001">黄悦</a>
+      <div class="img-box f-video-wrap">
+        <a class="img-item" data-v_vidiourl="" data-v_h265="" data-v_vidioswfurl="https://photovideo.photo.qq.com/a.f20.mp4" data-v_picinfo_url="https://a.qpic.cn/poster.jpg" data-v_itemid="vid1">
+          <img class="video-img" src="https://a.qpic.cn/poster.jpg">
+        </a>
+      </div>
+    </div>
+  </div>
+</li>`
+	posts := parseFeedHTML(html, time.Date(2026, 10, 4, 16, 9, 0, 0, shanghaiLoc))
+	if len(posts) != 1 {
+		t.Fatalf("posts=%d", len(posts))
+	}
+	if len(posts[0].Media) != 1 || posts[0].Media[0].Type != "video" || posts[0].Media[0].URL != "https://photovideo.photo.qq.com/a.f20.mp4" {
+		t.Fatalf("media %+v", posts[0].Media)
+	}
+	if posts[0].Media[0].Poster != "https://a.qpic.cn/poster.jpg" {
+		t.Fatalf("poster %q", posts[0].Media[0].Poster)
+	}
+}
+
+func TestApplyFeedMoodMediaLivePhoto(t *testing.T) {
+	item := gjson.Parse(`{
+		"pic":[
+			{"is_video":1,"url1":"https://a.qpic.cn/cover.jpg","url3":"https://a.qpic.cn/still.jpg","video_info":{"url1":"https://a.qpic.cn/cover.jpg","url3":"https://photovideo.photo.qq.com/live.mp4","video_id":"v1"}},
+			{"url1":"https://a.qpic.cn/plain.jpg","url3":"https://a.qpic.cn/plain-hd.jpg"}
+		],
+		"video":[{"url1":"https://a.qpic.cn/vcover.jpg","url3":"https://photovideo.photo.qq.com/clip.mp4","video_id":"v2"}]
+	}`)
+	post := &MoodPost{
+		FeedType: "shuoshuo",
+		Media: []MoodMedia{{
+			Type: "image",
+			URL:  "https://a.qpic.cn/plain-hd.jpg",
+			Path: "media/old.jpg",
+		}},
+	}
+	if !applyFeedMoodMedia(post, item) {
+		t.Fatal("expected live photo to replace stills")
+	}
+	if len(post.Media) != 3 {
+		t.Fatalf("media %+v", post.Media)
+	}
+	if post.Media[0].Type != "video" || post.Media[0].URL != "https://photovideo.photo.qq.com/live.mp4" || post.Media[0].Path != "" {
+		t.Fatalf("live %+v", post.Media[0])
+	}
+	if post.Media[1].Type != "image" || post.Media[1].Path != "media/old.jpg" {
+		t.Fatalf("still %+v", post.Media[1])
+	}
+	if post.Media[2].Type != "video" || post.Media[2].URL != "https://photovideo.photo.qq.com/clip.mp4" {
+		t.Fatalf("clip %+v", post.Media[2])
+	}
+
+	plain := &MoodPost{Media: []MoodMedia{{Type: "image", URL: "https://a.qpic.cn/plain.jpg", Path: "media/keep.jpg"}}}
+	onlyImage := gjson.Parse(`{"pic":[{"url1":"https://a.qpic.cn/plain.jpg","url3":"https://a.qpic.cn/plain-hd.jpg"}]}`)
+	if applyFeedMoodMedia(plain, onlyImage) {
+		t.Fatal("plain photo should stay")
+	}
+	if plain.Media[0].Path != "media/keep.jpg" {
+		t.Fatalf("path changed %+v", plain.Media[0])
+	}
+}
+
 func TestAdaptFeedComments(t *testing.T) {
 	raw := gjson.Parse(`[{"uin":"9","nick":"甲","content":"你好","create_time":1700000000,"replyList":[{"uin":"8","nick":"乙","content":"回复"}]}]`).Array()
 	comments := adaptFeedComments(raw)

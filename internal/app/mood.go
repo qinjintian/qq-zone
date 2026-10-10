@@ -29,7 +29,7 @@ type MoodMedia struct {
 	ID      string   `json:"id,omitempty"`       // 空间侧 pic_id / 视频 id，失败重试时用来对上同一份文件
 	Type    string   `json:"type"`               // image / video / voice
 	Path    string   `json:"path,omitempty"`     // 相对查看页的本地路径；下载失败会清空，避免链到半截文件
-	Poster  string   `json:"poster,omitempty"`   // 视频封面相对路径
+	Poster  string   `json:"poster,omitempty"`   // 视频封面：本地相对路径，或详情里的封面地址
 	URL     string   `json:"url,omitempty"`      // 主下载地址，查看页生成时会去掉
 	URLs    []string `json:"urls,omitempty"`     // 换源候选
 	VideoID string   `json:"video_id,omitempty"` // 腾讯视频 vid，403 时走 getinfo 换源
@@ -60,38 +60,39 @@ type MoodRepost struct {
 
 // MoodPost 是给查看页用的一条规范化说说。
 type MoodPost struct {
-	TID          string        `json:"tid"`                      // 空间侧说说 id，增量合并和失败重试的主键
-	Author       MoodPerson    `json:"author"`                   // 发表者
-	Time         int64         `json:"time"`                     // 发表时间 unix 秒，年份导航和排序用这个
-	TimeText     string        `json:"time_text,omitempty"`      // 发表时间展示文案
-	EditTime     int64         `json:"edit_time,omitempty"`      // 最后编辑 unix 秒；没改过则为 0
-	EditTimeText string        `json:"edit_time_text,omitempty"` // 有过编辑时的展示文案，查看页显示「编辑于」
-	Content      string        `json:"content"`                  // 纯文本，搜索用
-	HTML         string        `json:"html,omitempty"`           // 已转义的展示 HTML
-	Source       string        `json:"source,omitempty"`         // 来源，如手机 QQ
-	Location     string        `json:"location,omitempty"`       // 定位地名
-	ShareTitle   string        `json:"share_title,omitempty"`    // 分享卡片标题
-	ShareURL     string        `json:"share_url,omitempty"`      // 分享链接
-	FeedType     string        `json:"feed_type,omitempty"`      // 个人中心动态类型：shuoshuo / blog / photo / share / repost
-	FeedLabel    string        `json:"feed_label,omitempty"`     // 查看页上的类型名：说说、日志、相册、分享、转发
-	Action       string        `json:"action,omitempty"`         // 动态动作，如「发表说说」「写了日志」
-	Title        string        `json:"title,omitempty"`          // 日志或分享标题
-	BlogID       string        `json:"blog_id,omitempty"`        // 日志 id，用来补拉全文
-	OriginTID    string        `json:"origin_tid,omitempty"`     // 说说 tid，用来补评论和点赞；和动态自己的 tid 不是同一个
-	Unikey       string        `json:"unikey,omitempty"`         // 点赞接口用的资源键
-	CommentKnown bool          `json:"-"`                        // 卡片上是否已经给出评论数；没有的话要再去拉
-	LikeKnown    bool          `json:"-"`                        // 卡片上是否已经给出赞数
-	Media        []MoodMedia   `json:"media,omitempty"`          // 正文配图/视频/语音
-	Repost       *MoodRepost   `json:"repost,omitempty"`         // 转发的原说说，原创则为空
-	Likes        []MoodPerson  `json:"likes,omitempty"`          // 点赞人名单，来自 get_like_list_app 的 like_uin_info
-	LikeCount    int           `json:"like_count"`               // 点赞人数，来自 qz_opcnt2 likedata.cnt 或点赞名单总数
-	VisitCount   int           `json:"visit_count,omitempty"`    // 浏览次数，来自 qz_opcnt2 current.newdata（如 PRD）
-	Comments     []MoodComment `json:"comments,omitempty"`       // 评论（含楼中楼）；留言板里是这条留言下的回复
-	CommentCount int           `json:"comment_count"`            // 空间侧声明的评论数
-	Floor        int           `json:"floor,omitempty"`          // 留言板楼层，空间页「第N楼」；说说不用
-	Secret       bool          `json:"secret,omitempty"`         // 留言板私密留言；当前账号看不到正文
-	HasMoreCon   bool          `json:"-"`                        // 列表里正文被截断，需要再拉详情
-	PicTotal     int           `json:"-"`                        // 空间侧声明的配图总数，用来判断要不要补拉
+	TID                string        `json:"tid"`                      // 空间侧说说 id，增量合并和失败重试的主键
+	Author             MoodPerson    `json:"author"`                   // 发表者
+	Time               int64         `json:"time"`                     // 发表时间 unix 秒，年份导航和排序用这个
+	TimeText           string        `json:"time_text,omitempty"`      // 发表时间展示文案
+	EditTime           int64         `json:"edit_time,omitempty"`      // 最后编辑 unix 秒；没改过则为 0
+	EditTimeText       string        `json:"edit_time_text,omitempty"` // 有过编辑时的展示文案，查看页显示「编辑于」
+	Content            string        `json:"content"`                  // 纯文本，搜索用
+	HTML               string        `json:"html,omitempty"`           // 已转义的展示 HTML
+	Source             string        `json:"source,omitempty"`         // 来源，如手机 QQ
+	Location           string        `json:"location,omitempty"`       // 定位地名
+	ShareTitle         string        `json:"share_title,omitempty"`    // 分享卡片标题
+	ShareURL           string        `json:"share_url,omitempty"`      // 分享链接
+	FeedType           string        `json:"feed_type,omitempty"`      // 个人中心动态类型：shuoshuo / blog / photo / share / repost
+	FeedLabel          string        `json:"feed_label,omitempty"`     // 查看页上的类型名：说说、日志、相册、分享、转发
+	Action             string        `json:"action,omitempty"`         // 动态动作，如「发表说说」「写了日志」
+	Title              string        `json:"title,omitempty"`          // 日志或分享标题
+	BlogID             string        `json:"blog_id,omitempty"`        // 日志 id，用来补拉全文
+	OriginTID          string        `json:"origin_tid,omitempty"`     // 说说 tid，用来补评论和点赞；和动态自己的 tid 不是同一个
+	Unikey             string        `json:"unikey,omitempty"`         // 点赞接口用的资源键
+	CommentKnown       bool          `json:"-"`                        // 卡片上是否已经给出评论数；没有的话要再去拉
+	LikeKnown          bool          `json:"-"`                        // 卡片上是否已经给出赞数
+	Media              []MoodMedia   `json:"media,omitempty"`          // 正文配图/视频/语音
+	Repost             *MoodRepost   `json:"repost,omitempty"`         // 转发的原说说，原创则为空
+	Likes              []MoodPerson  `json:"likes,omitempty"`          // 点赞人名单，来自 get_like_list_app 的 like_uin_info
+	LikeCount          int           `json:"like_count"`               // 点赞人数，来自 qz_opcnt2 likedata.cnt 或点赞名单总数
+	VisitCount         int           `json:"visit_count,omitempty"`    // 浏览次数，来自 qz_opcnt2 current.newdata（如 PRD）
+	Comments           []MoodComment `json:"comments,omitempty"`       // 评论（含楼中楼）；留言板里是这条留言下的回复
+	CommentCount       int           `json:"comment_count"`            // 空间侧声明的评论数
+	Floor              int           `json:"floor,omitempty"`          // 留言板楼层，空间页「第N楼」；说说不用
+	Secret             bool          `json:"secret,omitempty"`         // 留言板私密留言；当前账号看不到正文
+	HasMoreCon         bool          `json:"-"`                        // 列表里正文被截断，需要再拉详情
+	PicTotal           int           `json:"-"`                        // 空间侧声明的配图总数，用来判断要不要补拉
+	MediaMotionChecked bool          `json:"motion_checked,omitempty"` // 已向说说详情确认过有没有实况图或视频；为真后不再重复请求
 }
 
 // MoodBackupFile 是 backup.json 的完整结构，程序增量备份时读它。
